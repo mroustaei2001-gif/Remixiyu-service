@@ -4,7 +4,7 @@ import random
 import json
 from datetime import datetime, timezone
 from telethon import TelegramClient, events, errors
-from telethon.tl.types import UpdateChannelParticipant, ChannelParticipantLeft
+from telethon.tl.types import InputPeerUser
 from telethon.sessions import StringSession
 
 API_ID_STR = os.environ.get("API_ID", "").strip()
@@ -45,73 +45,87 @@ def save_messages(msgs):
 messages_list = load_messages()
 processed_users = set()
 sent_count_today = 0
+failed_count_today = 0
+last_error_reason = "بدون خطا"
 last_day_reset = datetime.now(timezone.utc).day
-currently_processing = None  # نشان‌دهنده کاربری که الان در تایمر انتظار است
+currently_processing = None
 
 send_queue = asyncio.Queue()
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 async def queue_worker():
-    global sent_count_today, last_day_reset, currently_processing
+    global sent_count_today, failed_count_today, last_error_reason, last_day_reset, currently_processing
     while True:
-        user_target = await send_queue.get()
-        currently_processing = user_target
+        item = await send_queue.get()
+        user_id = item["user_id"]
+        peer = item["peer"]
+        currently_processing = user_id
         try:
             current_day = datetime.now(timezone.utc).day
             if current_day != last_day_reset:
                 sent_count_today = 0
+                failed_count_today = 0
                 last_day_reset = current_day
 
             if sent_count_today >= DAILY_SEND_LIMIT:
-                print(f"[Limit] سقف روزانه پر شده است. پیام به {user_target} لغو شد.", flush=True)
+                print(f"[Limit] سقف روزانه پر شده است. پیام به {user_id} لغو شد.", flush=True)
                 continue
 
-            # تأخیر تصادفی ۲ تا ۵ دقیقه
-            delay = random.randint(120, 300)
-            print(f"[Worker] کاربر {user_target} در نوبت ارسال. انتظار به مدت {delay} ثانیه...", flush=True)
+            # تأخیر تصادفی ۲ تا ۴ دقیقه
+            delay = random.randint(120, 240)
+            print(f"[Worker] کاربر {user_id} در نوبت ارسال. انتظار به مدت {delay} ثانیه...", flush=True)
             await asyncio.sleep(delay)
 
             msg_text = random.choice(messages_list) if messages_list else random.choice(DEFAULT_MESSAGES)
 
             try:
-                await client.send_message(user_target, msg_text)
+                await client.send_message(peer, msg_text)
                 sent_count_today += 1
-                print(f"[Worker Success] پیام به کاربر {user_target} با موفقیت ارسال شد. ({sent_count_today}/{DAILY_SEND_LIMIT})", flush=True)
+                print(f"[Worker Success] پیام به کاربر {user_id} با موفقیت ارسال شد. ({sent_count_today}/{DAILY_SEND_LIMIT})", flush=True)
             except errors.UserPrivacyRestrictedError:
-                print(f"[Privacy] پی‌وی کاربر {user_target} بسته است.", flush=True)
+                failed_count_today += 1
+                last_error_reason = f"پی‌وی کاربر {user_id} بسته بود"
+                print(f"[Privacy] {last_error_reason}", flush=True)
             except errors.PeerFloodError:
+                failed_count_today += 1
+                last_error_reason = "محدودیت اسپم تلگرام (PeerFlood)"
                 print("[Flood] محدودیت تلگرام! توقف موقت صف به مدت ۴۵ دقیقه...", flush=True)
                 await asyncio.sleep(2700)
             except errors.FloodWaitError as e:
+                failed_count_today += 1
+                last_error_reason = f"محدودیت زمانی ({e.seconds} ثانیه)"
                 print(f"[FloodWait] توقف صف برای {e.seconds} ثانیه.", flush=True)
                 await asyncio.sleep(e.seconds + 5)
             except Exception as e:
-                print(f"[Send Error] خطا در ارسال به {user_target}: {e}", flush=True)
+                failed_count_today += 1
+                last_error_reason = f"{type(e).__name__}: {str(e)[:40]}"
+                print(f"[Send Error] خطا در ارسال به {user_id}: {e}", flush=True)
 
         finally:
             currently_processing = None
             send_queue.task_done()
 
-# روش اول: بررسی خودکار گزارش خروج‌های کانال (Recent Actions) هر ۳۰ ثانیه (۱۰۰٪ تضمینی برای یوزربات)
+# دریافت دقیق لفت‌داده‌ها از Admin Log به همراه Access Hash برای ارسال ۱۰۰٪ تضمینی
 async def poll_admin_log():
+    global last_error_reason
     print("🔍 اسکنر گزارش خروج کانال (Admin Log) فعال شد...", flush=True)
     last_event_id = 0
     try:
         channel_entity = await client.get_entity(TARGET_CHANNEL_ID)
-        # ثبت آخرین رویداد فعلی تا به لفت‌های قدیمی پیام ندهد
         async for event in client.iter_admin_log(channel_entity, limit=1, leave=True):
             last_event_id = event.id
             print(f"[AdminLog] نقطه شروع ثبت شد (آخرین آیدی رویداد: {last_event_id})", flush=True)
     except Exception as e:
-        print(f"[AdminLog Init Error] اطمینان حاصل کنید اکانت در کانال ادمین است: {e}", flush=True)
+        last_error_reason = f"خطای دسترسی به کانال: {str(e)[:30]}"
+        print(f"[AdminLog Init Error] {e}", flush=True)
 
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(25)
         try:
             channel_entity = await client.get_entity(TARGET_CHANNEL_ID)
             new_events = []
-            async for event in client.iter_admin_log(channel_entity, limit=20, leave=True):
+            async for event in client.iter_admin_log(channel_entity, limit=25, leave=True):
                 if last_event_id != 0 and event.id <= last_event_id:
                     break
                 new_events.append(event)
@@ -122,31 +136,18 @@ async def poll_admin_log():
                     user_id = ev.user_id
                     if user_id and user_id not in processed_users:
                         processed_users.add(user_id)
-                        print(f"[Detect - AdminLog] خروج کاربر {user_id} شناسایی شد! افزودن به صف...", flush=True)
-                        # ذخیره مستقیم آبجکت کاربر تا بدون نیاز به نقطه یا چت قبلی پیام ارسال شود
-                        target = ev.user if ev.user else user_id
-                        await send_queue.put(target)
+                        # ساخت InputPeerUser با access_hash مستقیم از لاگ کانال
+                        if ev.user and getattr(ev.user, 'access_hash', None) is not None:
+                            peer = InputPeerUser(ev.user.id, ev.user.access_hash)
+                        elif ev.user:
+                            peer = ev.user
+                        else:
+                            peer = user_id
+
+                        print(f"[Detect] خروج کاربر {user_id} ثبت شد! افزودن به صف...", flush=True)
+                        await send_queue.put({"user_id": user_id, "peer": peer})
         except Exception as e:
             print(f"[AdminLog Poll Error] {e}", flush=True)
-
-# روش دوم: دریافت رویداد لحظه‌ای در صورت ارسال از سمت سرور
-@client.on(events.Raw(UpdateChannelParticipant))
-async def on_user_left(event):
-    try:
-        raw_channel_id = int(f"-100{event.channel_id}")
-        if raw_channel_id != TARGET_CHANNEL_ID:
-            return
-
-        if isinstance(event.new_participant, ChannelParticipantLeft):
-            user_id = event.user_id
-            if user_id in processed_users:
-                return
-
-            processed_users.add(user_id)
-            print(f"[Detect - Raw] خروج کاربر {user_id} شناسایی شد! افزودن به صف...", flush=True)
-            await send_queue.put(user_id)
-    except Exception as e:
-        print(f"[Event Error] {e}", flush=True)
 
 @client.on(events.NewMessage(outgoing=True))
 async def handle_saved_commands(event):
@@ -167,7 +168,7 @@ async def handle_saved_commands(event):
             "▫️ `.listmsg` : نمایش لیست پیام‌های فعال\n"
             "▫️ `.resetall` : حذف تمام متن‌ها و خالی کردن لیست\n"
             "▫️ `.clearmsg` : بازگشت به متن‌های پیش‌فرض شما\n"
-            "▫️ `.status` : وضعیت صف و سقف روزانه"
+            "▫️ `.status` : وضعیت صف، ارسال‌ها و خطاها"
         )
         await event.edit(help_msg)
 
@@ -198,13 +199,15 @@ async def handle_saved_commands(event):
         await event.edit("🔄 متن‌ها به حالت پیش‌فرض اختصاصی شما برگشتند.")
 
     elif text == ".status":
-        in_timer = "۱ نفر (در حال سپری کردن تایمر ۲ تا ۵ دقیقه)" if currently_processing else "۰ نفر"
+        in_timer = f"کاربر {currently_processing} (در تایمر ۲ تا ۴ دقیقه)" if currently_processing else "۰ نفر"
         status_text = (
             f"📊 **وضعیت ربات بازگشت ممبر:**\n\n"
             f"⏳ در حال انتظار تایمر: `{in_timer}`\n"
-            f"▫️ کاربران بعدی در صف: `{send_queue.qsize()}`\n"
-            f"▫️ ارسال‌های موفق امروز: `{sent_count_today} / {DAILY_SEND_LIMIT}`\n"
-            f"▫️ تعداد متون فعال: `{len(messages_list)}`"
+            f"▫️ نفرات بعدی در صف: `{send_queue.qsize()}`\n"
+            f"✅ ارسال‌های موفق امروز: `{sent_count_today} / {DAILY_SEND_LIMIT}`\n"
+            f"❌ ارسال‌های ناموفق: `{failed_count_today}`\n"
+            f"⚠️ آخرین خطا: `{last_error_reason}`\n"
+            f"📝 تعداد متون فعال: `{len(messages_list)}`"
         )
         await event.edit(status_text)
 
