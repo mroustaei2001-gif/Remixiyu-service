@@ -1,0 +1,5 @@
+telethon
+pydub
+mutagen
+pillow
+aiohttp
