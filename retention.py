@@ -2,7 +2,7 @@ import os
 import asyncio
 import random
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from telethon import TelegramClient, events, errors
 from telethon.tl.types import UpdateChannelParticipant, ChannelParticipantLeft
 from telethon.sessions import StringSession
@@ -10,7 +10,7 @@ from telethon.sessions import StringSession
 # متغیرها از تنظیمات ریل‌وی خوانده می‌شوند
 API_ID_STR = os.environ.get("API_ID", "").strip()
 API_HASH = os.environ.get("API_HASH", "").strip()
-SESSION_STRING = os.environ.get("RETENTION_SESSION", "").strip()
+SESSION_STRING = (os.environ.get("RETENTION_SESSION") or os.environ.get("SESSION_STRING", "")).strip()
 TARGET_CHANNEL_ID_STR = os.environ.get("TARGET_CHANNEL_ID", "").strip()
 
 # اعتبارسنجی اولیه متغیرها
@@ -21,10 +21,11 @@ TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR) if TARGET_CHANNEL_ID_STR.lstrip("
 DAILY_SEND_LIMIT = 20
 MESSAGES_FILE = "retention_messages.json"
 
+# متن اختصاصی شما به همراه دو لحن مشابه برای جلوگیری از اسپم شدن اکانت
 DEFAULT_MESSAGES = [
-    "سلام وقتتون بخیر 🌹\nدیدیم از کانال لفت دادید، خوشحال می‌شیم دلیلتون یا انتقادتون رو بهمون بگید تا کیفیت رو بهتر کنیم.\nاگر مایل بودید باز هم همراه ما باشید:\n@remixiyu",
-    "درود بر شما دوست عزیز 🌱\nمتوجه خروجتون از کانال شدیم. پیشنهادی برای بهتر شدن مطالب دارید؟ مشتاق شنیدن نظرتون هستیم.\nلینک کانال برای همراهی مجدد:\n@remixiyu",
-    "سلام و وقت بخیر 🤍\nدلیل خروجتون از کانال چی بود؟ با گفتن نظرتون کمکمون می‌کنید عملکرد بهتری داشته باشیم.\nخوشحال می‌شیم دوباره ببینیمتون:\n@remixiyu"
+    "سلام خوبی بیزحمت بلاک نکن ❤️\nادمین کانال (ریمیکسی یو) هستم\nدیدم لفت دادید خواستم انتقاد، پیشنهاد و علت اینکه رفتید رو بهم بگید\nدمت هم گرم\nاگر باز دوس داشتی کنارمون باشی و حمایتمون کنی بیا قدمت رو چشم❤️♠️\nJoin us:\n🆔️ @remixiyu",
+    "سلام وقتت بخیر بیزحمت بلاک نکنید 🤍\nادمین چنل (ریمیکسی یو) هستم\nمتوجه شدم از کانال خارج شدید، می‌خواستم دلیل رفتنتون یا انتقادی اگر هست رو بشنوم تا بهتر بشیم\nدمت گرم\nاگر مایل بودید باز هم کنارمون باشید قدمتون روی چشم 🌱❤️\nJoin us:\n🆔️ @remixiyu",
+    "درود دوست عزیز، بیزحمت بلاک نکن 🌹\nادمین کانال (ریمیکسی یو) هستم\nدیدم لفت دادید، خوشحال میشم انتقاد، پیشنهاد یا علت رفتنتون رو بهم بگید\nدمت هم گرم\nاگه باز دوست داشتی حمایتمون کنی بیا قدمت رو چشم ❤️♠️\nJoin us:\n🆔️ @remixiyu"
 ]
 
 def load_messages():
@@ -48,7 +49,7 @@ def save_messages(msgs):
 messages_list = load_messages()
 processed_users = set()
 sent_count_today = 0
-last_day_reset = datetime.utcnow().day
+last_day_reset = datetime.now(timezone.utc).day
 
 # صف پردازش ناهمگام
 send_queue = asyncio.Queue()
@@ -61,7 +62,7 @@ async def queue_worker():
     while True:
         user_id = await send_queue.get()
         try:
-            current_day = datetime.utcnow().day
+            current_day = datetime.now(timezone.utc).day
             if current_day != last_day_reset:
                 sent_count_today = 0
                 last_day_reset = current_day
@@ -78,7 +79,14 @@ async def queue_worker():
             msg_text = random.choice(messages_list) if messages_list else random.choice(DEFAULT_MESSAGES)
 
             try:
-                await client.send_message(user_id, msg_text)
+                # شناسایی کاربر برای ارسال مستقیم به پی‌وی بدون نیاز به چت قبلی
+                try:
+                    entity = await client.get_entity(user_id)
+                except ValueError:
+                    await client.get_participants(TARGET_CHANNEL_ID, limit=100)
+                    entity = await client.get_entity(user_id)
+
+                await client.send_message(entity, msg_text)
                 sent_count_today += 1
                 print(f"[Worker Success] پیام به کاربر {user_id} با موفقیت ارسال شد. (مجموع امروز: {sent_count_today}/{DAILY_SEND_LIMIT})", flush=True)
             except errors.UserPrivacyRestrictedError:
@@ -132,7 +140,7 @@ async def handle_saved_commands(event):
             "▫️ `.addmsg متن شما` : اضافه کردن پیام جدید\n"
             "▫️ `.listmsg` : نمایش لیست پیام‌های فعال\n"
             "▫️ `.resetall` : حذف تمام متن‌ها و خالی کردن لیست\n"
-            "▫️ `.clearmsg` : بازگشت به متن‌های پیش‌فرض اولیه\n"
+            "▫️ `.clearmsg` : بازگشت به متن‌های پیش‌فرض شما\n"
             "▫️ `.status` : وضعیت صف و سقف روزانه"
         )
         await event.edit(help_msg)
@@ -151,7 +159,7 @@ async def handle_saved_commands(event):
 
     elif text == ".listmsg":
         if not messages_list:
-            await event.edit("⚠️ لیست پیام‌ها خالی است! لطفاً با `.addmsg` پیام اضافه کنید.")
+            await event.edit("⚠️ لیست پیام‌ها خالی است! لطفاً با `.addmsg` پیام اضافه کنید یا `.clearmsg` بزنید.")
             return
         out = "📋 **لیست پیام‌های فعال:**\n\n"
         for i, m in enumerate(messages_list, 1):
@@ -161,38 +169,7 @@ async def handle_saved_commands(event):
     elif text == ".clearmsg":
         messages_list = DEFAULT_MESSAGES.copy()
         save_messages(messages_list)
-        await event.edit("🔄 متن‌ها به حالت پیش‌فرض اولیه برگشتند.")
-
-    elif text == ".status":
-        status_text = (
-            f"📊 **وضعیت ربات بازگشت ممبر:**\n\n"
-            f"▫️ کاربران در صف: `{send_queue.qsize()}`\n"
-            f"▫️ ارسال‌های موفق امروز: `{sent_count_today} / {DAILY_SEND_LIMIT}`\n"
-            f"▫️ تعداد متون فعال: `{len(messages_list)}`"
-        )
-        await event.edit(status_text)
-
-
-    elif text.startswith(".addmsg "):
-        new_msg = text[8:].strip()
-        if new_msg:
-            messages_list.append(new_msg)
-            save_messages(messages_list)
-            await event.edit(f"✅ پیام جدید اضافه شد!\nتعداد کل پیام‌ها: {len(messages_list)}")
-
-    elif text == ".listmsg":
-        if not messages_list:
-            await event.edit("⚠️ لیست پیام‌ها خالی است.")
-            return
-        out = "📋 **لیست پیام‌های فعال:**\n\n"
-        for i, m in enumerate(messages_list, 1):
-            out += f"**{i}.**\n{m}\n{'-'*20}\n"
-        await event.edit(out)
-
-    elif text == ".clearmsg":
-        messages_list = DEFAULT_MESSAGES.copy()
-        save_messages(messages_list)
-        await event.edit("🔄 تمام متون به حالت پیش‌فرض اولیه برگشتند.")
+        await event.edit("🔄 متن‌ها به حالت پیش‌فرض اختصاصی شما برگشتند.")
 
     elif text == ".status":
         status_text = (
@@ -209,15 +186,21 @@ async def main():
         return
 
     if not SESSION_STRING:
-        print("[CRITICAL] متغیر SESSION_STRING خالی است! لطفاً رشته سشن را در Variables ریل‌وی وارد کنید.", flush=True)
+        print("[CRITICAL] متغیر RETENTION_SESSION خالی است! لطفاً رشته سشن را در Variables ریل‌وی وارد کنید.", flush=True)
         return
 
-    print("در حال برقراری ارتباط با تلگرام...", flush=True)
+    print("در حال برقراری ارتباط ربات Retention با تلگرام...", flush=True)
     await client.connect()
 
     if not await client.is_user_authorized():
         print("[CRITICAL] سشن نامعتبر یا منقضی شده است! لطفاً سشن جدید بسازید.", flush=True)
         return
+
+    # شناسایی اولیه کانال در کش تلگرام برای دریافت مطمئن رویدادهای خروج
+    try:
+        await client.get_entity(TARGET_CHANNEL_ID)
+    except Exception as e:
+        print(f"[Warning] خطا در شناسایی اولیه کانال: {e}", flush=True)
 
     print("🚀 ربات Channel-Retention با موفقیت متصل و آنلاین شد!", flush=True)
     asyncio.create_task(queue_worker())
