@@ -10,7 +10,7 @@ from telethon.sessions import StringSession
 # متغیرها از تنظیمات ریل‌وی خوانده می‌شوند
 API_ID_STR = os.environ.get("API_ID", "").strip()
 API_HASH = os.environ.get("API_HASH", "").strip()
-SESSION_STRING = os.environ.get("SESSION_STRING", "").strip()
+SESSION_STRING = os.environ.get("RETENTION_SESSION", "").strip()
 TARGET_CHANNEL_ID_STR = os.environ.get("TARGET_CHANNEL_ID", "").strip()
 
 # اعتبارسنجی اولیه متغیرها
