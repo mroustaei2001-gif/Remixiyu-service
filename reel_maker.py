@@ -1,12 +1,14 @@
 import os
 import subprocess
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 TG_TEXT = "t.me/remixiyu"
 IG_TEXT = "remixiyu"
 TG_LOGO_PATH = "tg_logo.png"
 IG_LOGO_PATH = "ig_logo.png"
 MAX_DURATION = 60
+WIDTH = 1080
+HEIGHT = 1920
 
 
 def ensure_default_logos():
@@ -14,7 +16,7 @@ def ensure_default_logos():
     if not os.path.exists(TG_LOGO_PATH):
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        draw.ellipse((2, 2, 62, 62), fill=(36, 161, 222, 235))
+        draw.ellipse((2, 2, 62, 62), fill=(36, 161, 222, 240))
         draw.polygon(
             [(16, 33), (48, 19), (41, 47), (31, 38), (26, 43), (26, 36)],
             fill=(255, 255, 255, 255),
@@ -24,7 +26,7 @@ def ensure_default_logos():
     if not os.path.exists(IG_LOGO_PATH):
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle((4, 4, 60, 60), radius=16, fill=(225, 48, 108, 235))
+        draw.rounded_rectangle((4, 4, 60, 60), radius=16, fill=(225, 48, 108, 240))
         draw.rounded_rectangle(
             (13, 13, 51, 51), radius=11, outline=(255, 255, 255, 255), width=4
         )
@@ -33,8 +35,7 @@ def ensure_default_logos():
         img.save(IG_LOGO_PATH)
 
 
-def find_font_file() -> str:
-    """یک فایل فونت معتبر روی سیستم پیدا می‌کند تا drawtext خطای فونت ندهد."""
+def load_font(size: int):
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -43,8 +44,11 @@ def find_font_file() -> str:
     ]
     for path in candidates:
         if os.path.exists(path):
-            return path
-    return ""
+            try:
+                return ImageFont.truetype(path, size=size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
 
 
 def parse_time_to_seconds(t_str: str) -> int:
@@ -56,13 +60,56 @@ def parse_time_to_seconds(t_str: str) -> int:
     raise ValueError("فرمت زمان نامعتبر است. مثال درست: 00:35")
 
 
-def _escape_drawtext(text: str) -> str:
-    return (
-        text.replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
-        .replace(",", "\\,")
+def build_watermark_layer(layer_path: str, hook_text: str = ""):
+    """یک لایه شفاف 1080x1920 شامل واترماک لوگو + متن تلگرام و اینستاگرام می‌سازد."""
+    ensure_default_logos()
+    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+
+    font_wm = load_font(32)
+    font_hook = load_font(42)
+
+    # لوگو و متن تلگرام: [لوگو] + t.me/remixiyu
+    tg_y = 140
+    tg_logo = Image.open(TG_LOGO_PATH).convert("RGBA").resize((42, 42))
+    tg_x_start = 295
+    canvas.paste(tg_logo, (tg_x_start, tg_y), tg_logo)
+    draw.text(
+        (tg_x_start + 54, tg_y + 4),
+        TG_TEXT,
+        font=font_wm,
+        fill=(255, 255, 255, 225),
     )
+
+    # لوگو و متن اینستاگرام: [لوگو] + remixiyu
+    ig_y = 198
+    ig_logo = Image.open(IG_LOGO_PATH).convert("RGBA").resize((42, 42))
+    ig_x_start = 335
+    canvas.paste(ig_logo, (ig_x_start, ig_y), ig_logo)
+    draw.text(
+        (ig_x_start + 54, ig_y + 4),
+        IG_TEXT,
+        font=font_wm,
+        fill=(255, 255, 255, 225),
+    )
+
+    # متن قلاب اختیاری
+    if hook_text.strip():
+        clean_hook = hook_text.strip()
+        bbox = draw.textbbox((0, 0), clean_hook, font=font_hook)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        hx = max(20, (WIDTH - tw) // 2)
+        hy = 340
+        pad_x, pad_y = 20, 12
+        draw.rounded_rectangle(
+            (hx - pad_x, hy - pad_y, hx + tw + pad_x, hy + th + pad_y),
+            radius=16,
+            fill=(0, 0, 0, 130),
+        )
+        draw.text((hx, hy), clean_hook, font=font_hook, fill=(255, 255, 255, 250))
+
+    canvas.save(layer_path, format="PNG")
 
 
 def build_reel_video(
@@ -73,7 +120,8 @@ def build_reel_video(
     bg_path: str = "bg.mp4",
     hook_text: str = "",
 ) -> tuple[bool, str]:
-    ensure_default_logos()
+    if not os.path.exists(audio_path):
+        return False, "فایل صوتی ورودی یافت نشد."
 
     start_sec = parse_time_to_seconds(start_str)
     end_sec = parse_time_to_seconds(end_str)
@@ -83,108 +131,39 @@ def build_reel_video(
 
     duration = min(end_sec - start_sec, MAX_DURATION)
 
+    out_dir = os.path.dirname(output_path) or "."
+    overlay_png = os.path.join(out_dir, "watermark_overlay.png")
+    build_watermark_layer(overlay_png, hook_text=hook_text)
+
     has_bg = os.path.exists(bg_path)
     is_video_bg = has_bg and bg_path.lower().endswith(
         (".mp4", ".mov", ".mkv", ".webm")
     )
 
-    # ایندکس 0: پس‌زمینه 1080x1920
+    # ورودی 0: پس‌زمینه
     if is_video_bg:
         bg_inputs = ["-stream_loop", "-1", "-i", bg_path]
     elif has_bg:
         bg_inputs = ["-loop", "1", "-i", bg_path]
     else:
-        bg_inputs = ["-f", "lavfi", "-i", "color=c=#0b0e17:s=1080x1920:r=30"]
+        bg_inputs = ["-f", "lavfi", "-i", f"color=c=#0b0e17:s={WIDTH}x{HEIGHT}:r=30"]
 
-    font_path = find_font_file()
-    font_opt = f":fontfile='{_escape_drawtext(font_path)}'" if font_path else ""
-
-    filters = [
-        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,setsar=1,eq=brightness=-0.10,format=rgba[v0]"
-    ]
-    current_label = "v0"
-    next_input_idx = 1
-    step_idx = 1
-
-    # متن قلاب اختیاری
-    if hook_text.strip():
-        safe_hook = _escape_drawtext(hook_text.strip())
-        hook_lbl = f"v_hook_{step_idx}"
-        step_idx += 1
-        filters.append(
-            f"[{current_label}]drawtext=text='{safe_hook}'{font_opt}:"
-            f"fontcolor=white@0.95:fontsize=42:"
-            f"x=(w-text_w)/2:y=340:"
-            f"box=1:boxcolor=black@0.45:boxborderw=14[{hook_lbl}]"
-        )
-        current_label = hook_lbl
-
-    # واترماک تلگرام: [لوگو] + t.me/remixiyu
-    tg_y = 140
-    tg_logo_idx = next_input_idx
-    next_input_idx += 1
-    bg_inputs.extend(["-i", TG_LOGO_PATH])
-
-    tg_icon_lbl = f"tg_ico_{step_idx}"
-    tg_comp_lbl = f"v_tg_{step_idx}"
-    step_idx += 1
-
-    filters.append(f"[{tg_logo_idx}:v]scale=40:40,format=rgba[{tg_icon_lbl}]")
-    filters.append(
-        f"[{current_label}][{tg_icon_lbl}]overlay=x=305:y={tg_y}+4[{tg_comp_lbl}]"
+    # ورودی 1: لایه واترماک PNG
+    # ورودی 2: فایل صوتی بریده‌شده
+    filter_complex = (
+        f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={WIDTH}:{HEIGHT},setsar=1,eq=brightness=-0.10[bg];"
+        f"[bg][1:v]overlay=0:0:shortest=1[vout]"
     )
-    current_label = tg_comp_lbl
-
-    safe_tg = _escape_drawtext(TG_TEXT)
-    tg_txt_lbl = f"v_tg_txt_{step_idx}"
-    step_idx += 1
-    filters.append(
-        f"[{current_label}]drawtext=text='{safe_tg}'{font_opt}:"
-        f"fontcolor=white@0.85:fontsize=32:"
-        f"x=358:y={tg_y}+8:"
-        f"shadowcolor=black@0.7:shadowx=2:shadowy=2[{tg_txt_lbl}]"
-    )
-    current_label = tg_txt_lbl
-
-    # واترماک اینستاگرام: [لوگو] + remixiyu
-    ig_y = 198
-    ig_logo_idx = next_input_idx
-    next_input_idx += 1
-    bg_inputs.extend(["-i", IG_LOGO_PATH])
-
-    ig_icon_lbl = f"ig_ico_{step_idx}"
-    ig_comp_lbl = f"v_ig_{step_idx}"
-    step_idx += 1
-
-    filters.append(f"[{ig_logo_idx}:v]scale=40:40,format=rgba[{ig_icon_lbl}]")
-    filters.append(
-        f"[{current_label}][{ig_icon_lbl}]overlay=x=345:y={ig_y}+4[{ig_comp_lbl}]"
-    )
-    current_label = ig_comp_lbl
-
-    safe_ig = _escape_drawtext(IG_TEXT)
-    ig_txt_lbl = f"v_ig_txt_{step_idx}"
-    step_idx += 1
-    filters.append(
-        f"[{current_label}]drawtext=text='{safe_ig}'{font_opt}:"
-        f"fontcolor=white@0.85:fontsize=32:"
-        f"x=398:y={ig_y}+8:"
-        f"shadowcolor=black@0.7:shadowx=2:shadowy=2[{ig_txt_lbl}]"
-    )
-    current_label = ig_txt_lbl
-
-    # ایندکس واقعی فایل صوتی (بعد از پس‌زمینه و دو لوگو)
-    audio_input_idx = next_input_idx
-    filter_complex = ";".join(filters)
 
     cmd = [
         "ffmpeg",
         "-y",
-        "-nostats",
-        "-loglevel",
-        "error",
         *bg_inputs,
+        "-loop",
+        "1",
+        "-i",
+        overlay_png,
         "-ss",
         str(start_sec),
         "-t",
@@ -194,9 +173,9 @@ def build_reel_video(
         "-filter_complex",
         filter_complex,
         "-map",
-        f"[{current_label}]",
+        "[vout]",
         "-map",
-        f"{audio_input_idx}:a",
+        "2:a",
         "-c:v",
         "libx264",
         "-preset",
@@ -209,13 +188,18 @@ def build_reel_video(
         "192k",
         "-pix_fmt",
         "yuv420p",
-        "-shortest",
+        "-t",
+        str(duration),
         output_path,
     ]
 
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return True, f"ریلز {duration} ثانیه‌ای (1080x1920) با واترماک آماده شد."
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            return False, "فایل ویدئویی خروجی ساخته نشد یا خالی است."
+        return True, f"ریلز {duration} ثانیه‌ای ({WIDTH}x{HEIGHT}) با واترماک آماده شد."
     except subprocess.CalledProcessError as e:
-        raw_err = e.stderr.decode("utf-8", errors="ignore").strip()
-        return False, f"خطا در ffmpeg:\n{raw_err[-1500:] if raw_err else 'خروجی خطا خالی بود'}"
+        err_out = (e.stderr or b"").decode("utf-8", errors="ignore").strip()
+        std_out = (e.stdout or b"").decode("utf-8", errors="ignore").strip()
+        combined = f"{err_out}\n{std_out}".strip()
+        return False, f"خطا در ffmpeg (کد {e.returncode}):\n{combined[-1400:] or 'جزئیاتی ثبت نشد'}"
