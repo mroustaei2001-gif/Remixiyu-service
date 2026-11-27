@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 from telethon import TelegramClient, events
+from telethon.errors import FloodWaitError
 from reel_maker import (
     build_synced_reel,
     cut_audio_segment,
@@ -196,11 +197,23 @@ async def handle_reel(event):
         await status.delete()
 
 
-async def main():
+async def start_bot_with_flood_retry():
     if not BOT_TOKEN:
         raise RuntimeError("REEL_BOT_TOKEN یا BOT_TOKEN تنظیم نشده است.")
-    await client.start(bot_token=BOT_TOKEN)
-    _log("Reel bot is running...")
+
+    while True:
+        try:
+            await client.start(bot_token=BOT_TOKEN)
+            _log("Reel bot is running...")
+            return
+        except FloodWaitError as e:
+            wait_sec = int(getattr(e, "seconds", 60)) + 2
+            _log(f"FloodWaitError هنگام استارت ربات؛ انتظار به مدت {wait_sec} ثانیه...")
+            await asyncio.sleep(wait_sec)
+
+
+async def main():
+    await start_bot_with_flood_retry()
     await client.run_until_disconnected()
 
 
