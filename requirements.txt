@@ -4,3 +4,5 @@ mutagen
 pillow
 aiohttp
 requests
+arabic-reshaper
+python-bidi
