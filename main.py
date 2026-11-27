@@ -34,12 +34,16 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 STRING_SESSION = os.getenv('STRING_SESSION', '')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
 
-# اختیاری: هوش مصنوعی جایگزین (سازگار با OpenAI Chat Completions API)
+# تنظیمات هوش مصنوعی جایگزین (قابل تنظیم با متغیر محیطی یا استفاده از لیست پیش‌فرض سریع)
 FALLBACK_AI_API_KEY = os.getenv('FALLBACK_AI_API_KEY', '').strip()
-FALLBACK_AI_BASE_URL = os.getenv('FALLBACK_AI_BASE_URL', 'https://api.openai.com/v1').strip().rstrip('/')
-FALLBACK_AI_MODEL = os.getenv('FALLBACK_AI_MODEL', 'gpt-4o-mini').strip()
+FALLBACK_AI_BASE_URL = os.getenv('FALLBACK_AI_BASE_URL', 'https://api.groq.com/openai/v1').strip().rstrip('/')
+FALLBACK_AI_MODEL = os.getenv('FALLBACK_AI_MODEL', 'llama-3.3-70b-versatile').strip()
 
-# حداکثر تعداد تلاش سریع هوش مصنوعی اصلی پیش از سوییچ به جایگزین / جملات ترغیب‌کننده
+FALLBACK_AI_API_KEY_2 = os.getenv('FALLBACK_AI_API_KEY_2', '').strip()
+FALLBACK_AI_BASE_URL_2 = os.getenv('FALLBACK_AI_BASE_URL_2', 'https://openrouter.ai/api/v1').strip().rstrip('/')
+FALLBACK_AI_MODEL_2 = os.getenv('FALLBACK_AI_MODEL_2', 'openrouter/free').strip()
+
+# حداکثر تعداد تلاش سریع هوش مصنوعی اصلی پیش از سوییچ به زنجیره جایگزین
 AI_MAX_ATTEMPTS = int(os.getenv('AI_MAX_ATTEMPTS', '2'))
 
 # ==========================================
@@ -285,14 +289,23 @@ def parse_ai_json_caption(raw_text: str) -> str:
         return ""
     cleaned = re.sub(r'^```(?:json)?\s*', '', raw_text.strip())
     cleaned = re.sub(r'\s*```$', '', cleaned).strip()
-    parsed = json.loads(cleaned)
-    confidence = str(parsed.get("confidence", "high")).lower()
-    caption = str(parsed.get("caption", "")).strip()
-    mood = str(parsed.get("mood", "")).strip()
-    log(f"AI Vibe Analysis -> mood: {mood}, confidence: {confidence}, caption: {caption}")
-    if confidence != "low" and caption:
-        return next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
-    return ""
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            confidence = str(parsed.get("confidence", "high")).lower()
+            caption = str(parsed.get("caption", "")).strip()
+            mood = str(parsed.get("mood", "")).strip()
+            log(f"AI Vibe Analysis -> mood: {mood}, confidence: {confidence}, caption: {caption}")
+            if confidence != "low" and caption:
+                return next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
+            return ""
+    except Exception:
+        pass
+
+    match = re.search(r'"caption"\s*:\s*"([^"]+)"', cleaned)
+    if match:
+        return match.group(1).strip()
+    return next((ln.strip() for ln in cleaned.splitlines() if ln.strip() and not ln.strip().startswith('{')), "")
 
 
 async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
@@ -307,6 +320,7 @@ async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
                     m.get("name", "").replace("models/", "")
                     for m in models
                     if "generateContent" in (m.get("supportedGenerationMethods") or [])
+                    and "2.5-flash-lite" not in m.get("name", "").lower()
                 ]
                 flash_models = [n for n in valid_names if "flash" in n.lower()]
                 flash_models.sort(key=lambda x: (
@@ -317,52 +331,82 @@ async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
     except Exception as e:
         log(f"List Models Exception ({type(e).__name__}): {repr(e)}")
 
-    default_list = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-flash-latest"]
-    if CACHED_GEMINI_MODEL:
+    default_list = ["gemini-flash-lite-latest", "gemini-flash-latest"]
+    if CACHED_GEMINI_MODEL and "2.5-flash-lite" not in CACHED_GEMINI_MODEL:
         return [CACHED_GEMINI_MODEL] + [m for m in (candidates or default_list) if m != CACHED_GEMINI_MODEL]
     return candidates or default_list
 
 
-async def try_fallback_ai(session: aiohttp.ClientSession, track_name: str, artist_name: str) -> str:
-    """تلاش سریع روی هوش مصنوعی جایگزین در صورت عدم موفقیت Gemini در مهلت مقرر."""
-    if not FALLBACK_AI_API_KEY or not FALLBACK_AI_BASE_URL:
+def build_fallback_ai_chain() -> list:
+    """ساخت زنجیره چندگانه هوش مصنوعی جایگزین به ترتیب اولویت و سرعت."""
+    chain = []
+    if FALLBACK_AI_API_KEY and FALLBACK_AI_BASE_URL:
+        chain.append({
+            "name": "PrimaryFallback",
+            "api_key": FALLBACK_AI_API_KEY,
+            "base_url": FALLBACK_AI_BASE_URL,
+            "model": FALLBACK_AI_MODEL or "llama-3.3-70b-versatile",
+        })
+        if "groq.com" in FALLBACK_AI_BASE_URL:
+            chain.append({
+                "name": "GroqFast8B",
+                "api_key": FALLBACK_AI_API_KEY,
+                "base_url": FALLBACK_AI_BASE_URL,
+                "model": "llama-3.1-8b-instant",
+            })
+
+    if FALLBACK_AI_API_KEY_2 and FALLBACK_AI_BASE_URL_2:
+        chain.append({
+            "name": "SecondaryFallback",
+            "api_key": FALLBACK_AI_API_KEY_2,
+            "base_url": FALLBACK_AI_BASE_URL_2,
+            "model": FALLBACK_AI_MODEL_2 or "openrouter/free",
+        })
+
+    return chain
+
+
+async def try_fallback_ai_chain(session: aiohttp.ClientSession, track_name: str, artist_name: str) -> str:
+    """امتحان پشت‌سرهم چند هوش مصنوعی جایگزین با تایم‌اوت کوتاه تا اسلات زمانی معطل نشود."""
+    chain = build_fallback_ai_chain()
+    if not chain:
         return ""
 
-    url = f"{FALLBACK_AI_BASE_URL}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {FALLBACK_AI_API_KEY}",
-        "Content-Type": "application/json",
-    }
     prompt = build_vibe_prompt(track_name, artist_name, is_audio_included=False)
-    payload = {
-        "model": FALLBACK_AI_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.85,
-        "max_tokens": 140,
-    }
-
-    try:
-        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                choices = data.get("choices") or []
-                if choices:
-                    content = ((choices[0].get("message") or {}).get("content") or "").strip()
-                    cap = parse_ai_json_caption(content)
-                    if cap:
-                        log(f"Fallback AI succeeded ({FALLBACK_AI_MODEL}): {cap}")
-                        return cap
-            else:
-                err_txt = await resp.text()
-                log(f"Fallback AI HTTP {resp.status}: {err_txt[:150]}")
-    except Exception as e:
-        log(f"Fallback AI Error ({type(e).__name__}): {repr(e)}")
+    for item in chain:
+        url = f"{item['base_url']}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {item['api_key']}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": item["model"],
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.85,
+            "max_tokens": 120,
+        }
+        try:
+            async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=7)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    choices = data.get("choices") or []
+                    if choices:
+                        content = ((choices[0].get("message") or {}).get("content") or "").strip()
+                        cap = parse_ai_json_caption(content)
+                        if cap:
+                            log(f"Fallback AI succeeded ({item['name']} / {item['model']}): {cap}")
+                            return cap
+                else:
+                    err_txt = await resp.text()
+                    log(f"Fallback AI HTTP {resp.status} ({item['name']}): {err_txt[:140]}")
+        except Exception as e:
+            log(f"Fallback AI Error ({item['name']} - {type(e).__name__}): {repr(e)}")
 
     return ""
 
 
 async def generate_ai_music_description(audio_file_path: str, track_name: str, artist_name: str) -> str:
-    """تلاش محدود و سریع روی Gemini؛ در صورت عدم نتیجه، سوییچ به هوش مصنوعی جایگزین یا جملات ترغیب‌کننده."""
+    """تلاش محدود و سریع روی Gemini؛ در صورت عدم نتیجه، زنجیره هوش مصنوعی جایگزین و سپس جملات ترغیب‌کننده."""
     global CACHED_GEMINI_MODEL
 
     if not os.path.exists(audio_file_path):
@@ -444,8 +488,8 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
                         if CACHED_GEMINI_MODEL == model_name:
                             CACHED_GEMINI_MODEL = None
 
-            log("Primary AI did not reach result in time; trying fallback AI / persuasive captions...")
-            fallback_ai_cap = await try_fallback_ai(session, track_name, artist_name)
+            log("Primary AI did not reach result in time; trying fallback AI chain...")
+            fallback_ai_cap = await try_fallback_ai_chain(session, track_name, artist_name)
             if fallback_ai_cap:
                 return register_caption_and_return(fallback_ai_cap)
 
