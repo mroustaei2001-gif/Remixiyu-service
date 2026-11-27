@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import tempfile
 from telethon import TelegramClient, events
 from reel_maker import (
@@ -18,6 +19,10 @@ SESSION_PATH = os.path.join(BASE_DIR, "reel_bot_session")
 BG_VIDEO_PATH = os.path.join(BASE_DIR, "bg.mp4")
 
 client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
+
+
+def _log(msg: str):
+    print(f"[REEL_BOT] {msg}", file=sys.stderr, flush=True)
 
 
 def _is_audio_or_voice(msg) -> bool:
@@ -79,6 +84,7 @@ async def handle_setbg(event):
         await status.edit("❌ ذخیره ویدئوی پس‌زمینه ناموفق بود.")
         return
 
+    _log(f"ویدئوی پس‌زمینه ذخیره شد: {BG_VIDEO_PATH} ({os.path.getsize(BG_VIDEO_PATH)} bytes)")
     await status.edit("✅ ویدئوی پس‌زمینه ذخیره شد.")
 
 
@@ -159,6 +165,7 @@ async def handle_reel(event):
 
     start_str, end_str = time_tokens[0], time_tokens[1]
     status = await event.reply("🎬 در حال ساخت ریلز با سینک ریتماتیک و واترماک ثابت...")
+    _log(f"درخواست ساخت ریلز دریافت شد: {start_str} تا {end_str}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         src_audio = os.path.join(tmpdir, "track_audio")
@@ -169,13 +176,17 @@ async def handle_reel(event):
             await status.edit("❌ دانلود موزیک ناموفق بود.")
             return
 
-        ok, info_msg = build_synced_reel(
-            video_path=BG_VIDEO_PATH,
-            audio_path=downloaded,
-            output_path=out_video,
-            start_str=start_str,
-            end_str=end_str,
-            lyrics_text=lyrics_text,
+        loop = asyncio.get_running_loop()
+        ok, info_msg = await loop.run_in_executor(
+            None,
+            lambda: build_synced_reel(
+                video_path=BG_VIDEO_PATH,
+                audio_path=downloaded,
+                output_path=out_video,
+                start_str=start_str,
+                end_str=end_str,
+                lyrics_text=lyrics_text,
+            ),
         )
         if not ok:
             await status.edit(f"❌ {info_msg}")
@@ -187,9 +198,9 @@ async def handle_reel(event):
 
 async def main():
     if not BOT_TOKEN:
-        raise RuntimeError("REEL_BOT_TOKEN تنظیم نشده است.")
+        raise RuntimeError("REEL_BOT_TOKEN یا BOT_TOKEN تنظیم نشده است.")
     await client.start(bot_token=BOT_TOKEN)
-    print("Reel bot is running...")
+    _log("Reel bot is running...")
     await client.run_until_disconnected()
 
 
