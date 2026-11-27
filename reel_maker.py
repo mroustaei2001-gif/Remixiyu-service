@@ -22,14 +22,14 @@ HEIGHT = 1280
 FPS = 20
 
 # تنظیمات متعادل و تمیز روی کلیپ (با فضای آزاد در وسط برای متن آهنگ)
-WM_TEXT_ALPHA = 150
-WM_ICON_OPACITY = 0.92
+WM_TEXT_ALPHA = 165
+WM_ICON_OPACITY = 0.94
 CHANNEL_AVATAR_SIZE = 32
 CHANNEL_AVATAR_OPACITY = 0.96
 
 # پالت‌های رندومِ گرادیانی (هر کلیپ یک پالت ثابت و متمایز می‌گیرد)
 RANDOM_WAVE_PALETTES = [
-    ((55, 235, 240), (140, 145, 250), (185, 110, 245)),   # فیروزه‌ای + آبی یاسی + بنفش (مشابه نمونه)
+    ((65, 240, 245), (125, 165, 250), (180, 105, 245)),   # فیروزه‌ای به آبی یاسی و بنفش (دقیقاً مشابه تصویر دوم)
     ((255, 196, 120), (225, 130, 165), (175, 135, 245)),  # کهربایی گرم + صورتی ملایم + یاسی
     ((245, 145, 185), (170, 165, 250), (125, 215, 250)),  # صورتی ملایم + یاسی + آبی یخی
     ((95, 235, 185), (135, 210, 245), (195, 155, 250)),   # نعنایی نرم + آبی ملایم + یاسی کم‌اشباع
@@ -131,19 +131,25 @@ def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Im
 
 def build_bottom_shadow_overlay(width: int = WIDTH, height: int = HEIGHT) -> Image.Image:
     """
-    هاله سایه تیره و نرم در یک‌سوم پایین صفحه می‌سازد
-    تا اکولایزر و واترمارک روی هر کلیپی خوانا و یک‌دست بمانند.
+    هاله سایه عمیق و نرم در بخش پایینی صفحه (مشابه تصویر دوم):
+    از حدود وسط-پایین شروع می‌شود و در یک‌سوم پایین به مشکیِ عمیق می‌رسد
+    تا اکولایزر، هاله نوری و واترمارک کاملاً برجسته و یک‌دست دیده شوند.
     """
-    shadow_h = height // 3
+    shadow_h = int(height * 0.48)
     start_y = height - shadow_h
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    max_alpha = 175
+    max_alpha = 248
     for y in range(start_y, height):
         t = (y - start_y) / max(1, shadow_h - 1)
-        alpha = int(max_alpha * (t ** 1.55))
-        draw.line([(0, y), (width - 1, y)], fill=(8, 8, 12, alpha))
+        # در نیمه بالایی سایه نرم محو می‌شود و در پایین به مشکی عمیق می‌رسد
+        if t < 0.65:
+            norm = t / 0.65
+            alpha = int(max_alpha * (norm ** 1.45))
+        else:
+            alpha = max_alpha
+        draw.line([(0, y), (width - 1, y)], fill=(6, 6, 9, alpha))
 
     return overlay
 
@@ -288,7 +294,7 @@ def extract_rhythm_and_vocal_envelopes(
         duration,
         total_frames,
         af_filter="lowpass=f=240:p=1,highpass=f=45:p=1",
-        gain=5.4,
+        gain=5.6,
         sample_rate=8000,
     )
 
@@ -298,7 +304,7 @@ def extract_rhythm_and_vocal_envelopes(
         duration,
         total_frames,
         af_filter="bandpass=f=1450:w=1600:t=h",
-        gain=6.4,
+        gain=6.6,
         sample_rate=8000,
     )
 
@@ -310,21 +316,21 @@ def extract_rhythm_and_vocal_envelopes(
 
     prev_r_raw = rhythm_raw[0] if rhythm_raw else 0.2
     prev_v_raw = vocal_raw[0] if vocal_raw else 0.2
-    prev_r_out = 0.20
-    prev_v_out = 0.20
+    prev_r_out = 0.22
+    prev_v_out = 0.22
 
     for r_cur, v_cur in zip(rhythm_raw, vocal_raw):
         r_hit = max(0.0, r_cur - prev_r_raw) * 2.2
         if r_cur > rhythm_avg * 1.18:
             r_hit += (r_cur - rhythm_avg * 1.18) * 0.85
         r_target = min(1.0, r_cur * 0.88 + r_hit)
-        r_out = max(0.06, r_target * 0.85 + prev_r_out * 0.15)
+        r_out = max(0.08, r_target * 0.85 + prev_r_out * 0.15)
 
         v_accent = max(0.0, v_cur - prev_v_raw) * 1.75
         if v_cur > vocal_avg * 1.15:
             v_accent += (v_cur - vocal_avg * 1.15) * 0.80
         v_target = min(1.0, v_cur * 0.90 + v_accent)
-        v_out = max(0.06, v_target * 0.82 + prev_v_out * 0.18)
+        v_out = max(0.08, v_target * 0.82 + prev_v_out * 0.18)
 
         rhythm_env.append(r_out)
         vocal_env.append(v_out)
@@ -364,92 +370,113 @@ def draw_filled_ribbed_wave_equalizer(
     palette: tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]],
 ) -> int:
     """
-    دقیقاً سبک اکولایزرِ تصویر انتخاب‌شده:
-    منحنیِ نرمِ قله‌ای در بالا که سطح زیر آن با میله‌های عمودیِ ظریف و نزدیک‌به‌هم پر شده،
-    با خط پایه ظریف و درخشش ملایم در پایین کلیپ.
+    دقیقاً اکولایزر تصویر دوم با تمام جزئیات:
+    - قله اصلی برجسته‌تر در چپ-مرکز و قله ملایم‌تر در راست
+    - پرشدگیِ نیمه‌شفافِ یک‌دست + خطوط عمودیِ بسیار ظریف و متراکم روی آن
+    - هاله نوریِ پهن و نرم پشت قله‌ها + خط درخشان و تیز روی لبه بالایی
+    - خط جداکننده افقیِ ظریف بین اکولایزر و واترمارک
     """
     c1, c2, c3 = palette
 
-    wave_w = 310
-    wave_h = 68
-    start_x = (WIDTH - wave_w) // 2
-    base_y = HEIGHT - 148
+    wave_w = 320
+    wave_h = 112
+    pad = 24  # حاشیه اضافه برای پخش شدن نرمِ هاله نوری بدون بریدگی
+    canvas_w = wave_w + pad * 2
+    canvas_h = wave_h + pad * 2
 
-    overlay = Image.new("RGBA", (wave_w, wave_h), (0, 0, 0, 0))
-    glow_layer = Image.new("RGBA", (wave_w, wave_h), (0, 0, 0, 0))
+    start_x = (WIDTH - canvas_w) // 2
+    base_y = HEIGHT - 235
+
+    ambient_glow = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    tight_glow = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    overlay = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+
+    draw_amb = ImageDraw.Draw(ambient_glow)
+    draw_tight = ImageDraw.Draw(tight_glow)
     draw_main = ImageDraw.Draw(overlay)
-    draw_glow = ImageDraw.Draw(glow_layer)
 
-    bottom_line_y = wave_h - 10
+    bottom_line_y = pad + wave_h - 14
     phase = f_idx * 0.16
 
-    # رسم خطوط عمودیِ ظریفِ پرکننده زیر منحنی (ribbed spectrum fill)
-    bar_step = 4
-    bar_w = 2
     top_pts = []
+    for x_rel in range(0, wave_w + 1, 2):
+        u = x_rel / max(1, wave_w)
+        x = pad + x_rel
 
-    for x in range(0, wave_w, bar_step):
-        u = x / max(1, wave_w - 1)  # 0.0 تا 1.0
+        # دو سر منحنی نرم و تیز به صفر می‌رسند
+        edge_envelope = math.sin(u * math.pi) ** 1.7
 
-        # دو سر منحنی به صفر می‌رسند تا گوشه‌ها نرم و تیز شوند
-        edge_envelope = math.sin(u * math.pi) ** 1.65
+        # قله اصلی بلندتر در چپ-مرکز (ریتم/ضرب) و قله ملایم‌تر در راست (وکال)
+        left_peak = math.exp(-((u - 0.27) ** 2) / 0.015)
+        right_peak = math.exp(-((u - 0.72) ** 2) / 0.026)
 
-        # قله اصلی در سمت چپ-مرکز (واکنش قوی به ریتم و ضرب) و قله ملایم‌تر در راست (واکنش به وکال)
-        left_peak_shape = math.exp(-((u - 0.30) ** 2) / 0.018)
-        right_peak_shape = math.exp(-((u - 0.68) ** 2) / 0.028)
+        rhythm_pulse = 0.72 + 0.28 * math.sin(phase - u * 4.0)
+        vocal_pulse = 0.70 + 0.30 * math.cos(phase * 0.8 + u * 4.5)
 
-        rhythm_pulse = 0.65 + 0.35 * math.sin(phase - u * 4.5)
-        vocal_pulse = 0.65 + 0.35 * math.cos(phase * 0.8 + u * 5.0)
+        h_left = left_peak * (0.42 + rhythm_amp * 0.88 * rhythm_pulse)
+        h_right = right_peak * (0.22 + vocal_amp * 0.52 * vocal_pulse)
+        ripple = 0.05 * (0.5 + 0.5 * math.sin(u * 10.0 - phase))
 
-        h_left = left_peak_shape * (0.28 + rhythm_amp * 0.95 * rhythm_pulse)
-        h_right = right_peak_shape * (0.20 + vocal_amp * 0.72 * vocal_pulse)
-        base_ripple = 0.07 * (0.5 + 0.5 * math.sin(u * 11.0 - phase))
-
-        combined = min(1.0, (h_left + h_right + base_ripple) * edge_envelope)
-        bar_h = max(1, int(combined * (wave_h - 16)))
+        combined = min(1.0, (h_left + h_right + ripple) * edge_envelope)
+        bar_h = max(1, int(combined * (wave_h - 24)))
         y_top = bottom_line_y - bar_h
-        top_pts.append((x, y_top))
+        top_pts.append((x, y_top, u))
 
         col = _lerp_triple_color(c1, c2, c3, u)
-        # میله عمودیِ نیمه‌شفاف زیر منحنی
-        draw_main.line(
-            [(x, bottom_line_y), (x, y_top)],
-            fill=(col[0], col[1], col[2], 145),
-            width=bar_w,
-        )
 
-    # رسم خطِ منحنیِ درخشانِ لبه بالایی موج
+        # ۱. هاله نوریِ پهن پشت کل بدنه موج
+        draw_amb.line([(x, bottom_line_y), (x, y_top)], fill=(col[0], col[1], col[2], 140), width=3)
+
+        # ۲. پرشدگیِ نیمه‌شفافِ یک‌دست زیر منحنی
+        draw_main.line([(x, bottom_line_y), (x, y_top)], fill=(col[0], col[1], col[2], 115), width=2)
+
+        # ۳. خطوط عمودیِ ظریف و متراکم (ribbed texture) روی بدنه
+        if x_rel % 4 == 0:
+            draw_main.line([(x, bottom_line_y), (x, y_top)], fill=(col[0], col[1], col[2], 195), width=1)
+
+    # ۴. خط درخشان و تیز روی لبه بالایی منحنی
     if len(top_pts) >= 2:
         for idx in range(len(top_pts) - 1):
-            seg_u = idx / max(1, len(top_pts) - 2)
-            col = _lerp_triple_color(c1, c2, c3, seg_u)
-            draw_main.line(
-                [top_pts[idx], top_pts[idx + 1]],
-                fill=(col[0], col[1], col[2], 245),
-                width=2,
-            )
-            draw_glow.line(
-                [top_pts[idx], top_pts[idx + 1]],
-                fill=(col[0], col[1], col[2], 150),
-                width=5,
-            )
+            x1, y1, u1 = top_pts[idx]
+            x2, y2, _ = top_pts[idx + 1]
+            col = _lerp_triple_color(c1, c2, c3, u1)
+            # کمی روشن‌تر کردن خط لبه بالایی برای جلوه نئونی دقیق
+            bright = (min(255, col[0] + 45), min(255, col[1] + 45), min(255, col[2] + 45))
+            draw_tight.line([(x1, y1), (x2, y2)], fill=(col[0], col[1], col[2], 210), width=4)
+            draw_main.line([(x1, y1), (x2, y2)], fill=(bright[0], bright[1], bright[2], 255), width=2)
 
-    # خط افقیِ ظریفِ پایه زیر اکولایزر
-    for x in range(0, wave_w - 4, 4):
-        seg_u = x / max(1, wave_w - 1)
-        col = _lerp_triple_color(c1, c2, c3, seg_u)
-        edge_a = int(130 * math.sin(seg_u * math.pi))
+    # ۵. خط پایه ظریفِ چسبیده به زیر موج
+    for x_rel in range(0, wave_w, 4):
+        u = x_rel / max(1, wave_w)
+        col = _lerp_triple_color(c1, c2, c3, u)
+        edge_a = int(170 * math.sin(u * math.pi))
         draw_main.line(
-            [(x, bottom_line_y + 1), (x + 4, bottom_line_y + 1)],
+            [(pad + x_rel, bottom_line_y + 1), (pad + x_rel + 4, bottom_line_y + 1)],
             fill=(col[0], col[1], col[2], edge_a),
             width=1,
         )
 
-    glow_blurred = glow_layer.filter(ImageFilter.GaussianBlur(radius=4))
-    frame.paste(glow_blurred, (start_x, base_y), glow_blurred)
+    # ترکیب دو لایه هاله نوری + لایه اصلی
+    amb_blurred = ambient_glow.filter(ImageFilter.GaussianBlur(radius=14))
+    tight_blurred = tight_glow.filter(ImageFilter.GaussianBlur(radius=4))
+
+    frame.paste(amb_blurred, (start_x, base_y), amb_blurred)
+    frame.paste(tight_blurred, (start_x, base_y), tight_blurred)
     frame.paste(overlay, (start_x, base_y), overlay)
 
-    return base_y + bottom_line_y + 3
+    # ۶. خط جداکننده ظریف بین اکولایزر و واترمارک (مشابه تصویر دوم)
+    divider_y = base_y + bottom_line_y + 24
+    div_w = 270
+    div_x0 = (WIDTH - div_w) // 2
+    div_layer = Image.new("RGBA", (WIDTH, 4), (0, 0, 0, 0))
+    div_draw = ImageDraw.Draw(div_layer)
+    for dx in range(0, div_w, 3):
+        u = dx / max(1, div_w)
+        a = int(95 * math.sin(u * math.pi))
+        div_draw.line([(div_x0 + dx, 1), (div_x0 + dx + 3, 1)], fill=(220, 225, 240, a), width=1)
+    frame.paste(div_layer, (0, divider_y), div_layer)
+
+    return divider_y + 4
 
 
 def make_fixed_bottom_watermark(
@@ -532,8 +559,8 @@ def build_synced_reel(
 ) -> tuple[bool, str]:
     """
     کلیپ پس‌زمینه را هم‌اندازه تایم موزیک کات می‌زند، صدای اصلی کلیپ را قطع می‌کند،
-    سایه نرم یک‌سوم پایین را اعمال می‌کند، اکولایزر طیفیِ قله‌ای را با یک پالت رندومِ ثابت
-    برای همان کلیپ در پایین قرار می‌دهد و آواتار کانال + واترمارک را زیر آن و وسط‌چین ذخیره می‌کند.
+    سایه عمیق پایین صفحه را اعمال می‌کند، اکولایزر طیفیِ قله‌ای را با جزئیات کامل و پالت رندوم
+    در پایین قرار می‌دهد و آواتار کانال + واترمارک را زیر خط جداکننده و وسط‌چین ذخیره می‌کند.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -572,9 +599,7 @@ def build_synced_reel(
     wm_w, wm_h = wm_block.size
 
     fixed_wm_x = (WIDTH - wm_w) // 2
-    wave_bottom_y = HEIGHT - 87
-    gap_below_wave = 10
-    fixed_wm_y = min(HEIGHT - wm_h - 10, wave_bottom_y + gap_below_wave)
+    fixed_wm_y = HEIGHT - wm_h - 42
 
     is_video = video_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
     vid_input = ["-stream_loop", "-1", "-i", video_path] if is_video else ["-loop", "1", "-i", video_path]
@@ -739,7 +764,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر طیفی قله‌ای، سایه پایین و پالت رندوم آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با سایه عمیق پایین و اکولایزر طیفی پرجزئیات آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
