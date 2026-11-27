@@ -23,14 +23,15 @@ IG_TEXT = "remixiyu"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(BASE_DIR, "fonts")
-AUTO_FONT_PATH = os.path.join(FONTS_DIR, "ReelBoldFont.ttf")
+AUTO_FONT_PATH = os.path.join(FONTS_DIR, "PersianBoldFont.ttf")
 TG_LOGO_PATH = os.path.join(BASE_DIR, "tg_logo.png")
 IG_LOGO_PATH = os.path.join(BASE_DIR, "ig_logo.png")
 
+# فونت‌های غیرمتغیر (Static) با ضخامت Bold برای فارسی و لاتین
 FONT_DOWNLOAD_URLS = [
-    "https://github.com/google/fonts/raw/main/ofl/vazirmatn/Vazirmatn%5Bwght%5D.ttf",
-    "https://github.com/google/fonts/raw/main/ofl/notosansarabic/NotoSansArabic%5Bwdth%2Cwght%5D.ttf",
-    "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf",
+    "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Bold.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/notosansarabic/static/NotoSansArabic-Bold.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/rubik/Rubik-Bold.ttf",
 ]
 
 MAX_DURATION = 60
@@ -46,21 +47,38 @@ COLOR_PALETTE = [
     (255, 130, 185, 252),  # صورتی ملایم
 ]
 
+_FA_RESHAPER = None
+if arabic_reshaper is not None:
+    try:
+        _FA_RESHAPER = arabic_reshaper.ArabicReshaper(configuration={"language": "fa"})
+    except Exception:
+        _FA_RESHAPER = None
+
 
 def _log(msg: str):
     print(f"[REEL_MAKER] {msg}", file=sys.stderr, flush=True)
 
 
+def _normalize_persian_chars(text: str) -> str:
+    """حروف عربی رایج و نیم‌فاصله‌های نامتعارف را به فرم استاندارد فارسی نرمال می‌کند."""
+    s = text.replace("\u200c", " ")
+    s = s.replace("ك", "ک").replace("ي", "ی").replace("ى", "ی").replace("ۀ", "ه")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _shape_persian_text(text: str) -> str:
-    """در صورت وجود کتابخانه‌های reshaper و bidi، حروف فارسی را متصل و راست‌به‌چپ مرتب می‌کند."""
-    s = text.strip()
+    """متن فارسی را نرمال، متصل و راست‌به‌چپ مرتب می‌کند."""
+    s = _normalize_persian_chars(text)
     if not s:
         return ""
     has_persian = any("\u0600" <= ch <= "\u06FF" for ch in s)
     if not has_persian:
         return s
     try:
-        if arabic_reshaper is not None:
+        if _FA_RESHAPER is not None:
+            s = _FA_RESHAPER.reshape(s)
+        elif arabic_reshaper is not None:
             s = arabic_reshaper.reshape(s)
         if get_display is not None:
             s = get_display(s)
@@ -101,40 +119,26 @@ def apply_opacity(img: Image.Image, alpha_factor: float) -> Image.Image:
 
 
 def download_font_if_needed() -> str | None:
-    """در صورت نبود فونت بولد روی سیستم، فونت را به صورت خودکار دانلود می‌کند."""
-    if os.path.exists(AUTO_FONT_PATH) and os.path.getsize(AUTO_FONT_PATH) > 10000:
+    """در صورت نبود فونت بولد غیرمتغیر فارسی روی سیستم، آن را به صورت خودکار دانلود می‌کند."""
+    if os.path.exists(AUTO_FONT_PATH) and os.path.getsize(AUTO_FONT_PATH) > 15000:
         return AUTO_FONT_PATH
 
     os.makedirs(FONTS_DIR, exist_ok=True)
     for url in FONT_DOWNLOAD_URLS:
         try:
-            _log(f"در حال دانلود فونت بولد: {url}")
+            _log(f"در حال دانلود فونت بولد فارسی: {url}")
             resp = requests.get(url, timeout=20)
-            if resp.status_code == 200 and resp.content and len(resp.content) > 10000:
+            if resp.status_code == 200 and resp.content and len(resp.content) > 15000:
                 tmp_font = AUTO_FONT_PATH + ".tmp"
                 with open(tmp_font, "wb") as f:
                     f.write(resp.content)
                 os.replace(tmp_font, AUTO_FONT_PATH)
-                _log("فونت بولد با موفقیت دانلود و ذخیره شد.")
+                _log("فونت بولد فارسی با موفقیت دانلود و ذخیره شد.")
                 return AUTO_FONT_PATH
         except Exception as e:
             _log(f"خطا در دانلود فونت از {url}: {e}")
 
     return None
-
-
-def _apply_font_variation_bold(font, weight: int = 800):
-    """اگر فونت متغیر (Variable) باشد، وزن را روی Bold/ExtraBold تنظیم می‌کند."""
-    try:
-        if hasattr(font, "set_variation_by_axes"):
-            font.set_variation_by_axes([weight])
-    except Exception:
-        try:
-            if hasattr(font, "set_variation_by_name"):
-                font.set_variation_by_name("Bold")
-        except Exception:
-            pass
-    return font
 
 
 def load_bold_font(size: int):
@@ -150,8 +154,7 @@ def load_bold_font(size: int):
     for path in candidates:
         if path and os.path.exists(path):
             try:
-                f = ImageFont.truetype(path, size=size)
-                return _apply_font_variation_bold(f, weight=800)
+                return ImageFont.truetype(path, size=size)
             except Exception:
                 pass
     return ImageFont.load_default()
@@ -344,7 +347,6 @@ def extract_beat_envelope(
             energies.append(prev_val * 0.7)
             continue
         rms = math.sqrt(sum(s * s for s in chunk) / len(chunk)) / 32768.0
-        # واکنش تیزتر و سریع‌تر به اوج‌ها و افت‌های ضرباهنگ
         sharp_val = min(1.0, (rms * 5.2) ** 0.85)
         val = max(0.06, sharp_val * 0.8 + prev_val * 0.2)
         prev_val = val
@@ -354,8 +356,9 @@ def extract_beat_envelope(
 
 
 def _clean_phrase_text(raw: str) -> str:
-    """نقطه‌ها و نشانه‌های اضافی تبدیل‌صوت را تمیز می‌کند تا عبارت خوانا و روان بماند."""
-    cleaned = re.sub(r"[.،؛:!?]+", " ", raw)
+    """نقطه‌ها و نشانه‌های اضافی تبدیل‌صوت را تمیز می‌کند و حروف را به فارسی نرمال می‌کند."""
+    cleaned = _normalize_persian_chars(raw)
+    cleaned = re.sub(r"[.،؛:!?]+", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
@@ -365,7 +368,7 @@ def build_rhythmic_cues(
 ) -> list[tuple[int, int, str]]:
     """
     متن را تمیز و به عبارات منسجم تقسیم می‌کند و با زمان‌بندی متناسب‌تر با خواننده
-    (بدون جلو زدن سریع و با مکث بین عبارات) روی بازه فریم‌ها می‌نشاند.
+    روی بازه فریم‌ها می‌نشاند.
     """
     clean = lyrics_text.strip()
     if not clean:
@@ -390,7 +393,6 @@ def build_rhythmic_cues(
         return []
 
     total_frames = max(1, int(duration * fps))
-    # وزن هر عبارت بر اساس تعداد کلمات و حروف واقعی تا عبارات طولانی‌تر زمان کافی بگیرند
     weights = []
     for p in phrases:
         word_cnt = max(1, len(p.split()))
@@ -399,7 +401,7 @@ def build_rhythmic_cues(
 
     total_w = sum(weights)
     cues: list[tuple[int, int, str]] = []
-    cursor = int(fps * 0.35)  # شروع کمی آرام‌تر تا از خواننده جلو نیفتد
+    cursor = int(fps * 0.35)
 
     for idx, (phrase, w) in enumerate(zip(phrases, weights)):
         if cursor >= total_frames - 1:
@@ -409,7 +411,6 @@ def build_rhythmic_cues(
         if idx == len(phrases) - 1:
             end_f = total_frames - 1
         else:
-            # مکث طبیعی ۴ فریم بین عبارات برای هماهنگی بیشتر با خواننده
             end_f = min(total_frames - 1, max(start_f + 4, start_f + span - 4))
 
         cues.append((start_f, end_f, phrase))
@@ -435,7 +436,6 @@ def draw_equalizer_on_background(
     bar_color = (r, g, b, 225)
 
     for i in range(bar_count):
-        # اختلاف ارتفاع بیشتر بین میله‌های مجاور + فرکانس تیزتر
         center_dist = abs(i - (bar_count - 1) / 2.0) / ((bar_count - 1) / 2.0)
         envelope = max(0.28, 1.0 - 0.65 * (center_dist ** 1.3))
         sharp_wave = abs(math.sin(f_idx * 0.65 + i * 1.15)) ** 1.35
@@ -445,19 +445,18 @@ def draw_equalizer_on_background(
         y0 = base_y - h
         x1 = x0 + bar_w
         y1 = base_y
-        # گوشه‌های تیزتر با radius=2
         draw.rounded_rectangle((x0, y0, x1, y1), radius=2, fill=bar_color)
 
 
 def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font_wm) -> Image.Image:
     """واترمارک کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله برای قرارگیری ثابت در پایین صفحه."""
     block_w = 240
-    block_h = 44  # دو ردیف ۲۲ پیکسلی زیر هم بدون فاصله
+    block_h = 44
     block = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(block)
 
     icon_size = 20
-    row_step = 22  # بدون فاصله عمودی بین دو خط
+    row_step = 22
 
     block.paste(tg_logo, (0, 1), tg_logo)
     draw.text((icon_size + 5, 2), TG_TEXT, font=font_wm, fill=(255, 255, 255, WM_ALPHA))
@@ -475,7 +474,7 @@ def draw_centered_bold_text(
     emoji_font,
     color_rgba: tuple[int, int, int, int],
 ):
-    """متن بولد، رنگی و دارای ایموجی را با شکل‌دهی فارسی و هماهنگی با خواننده در وسط ویدئو رسم می‌کند."""
+    """متن بولد فارسی، رنگی و دارای ایموجی را با شکل‌دهی صحیح در وسط ویدئو رسم می‌کند."""
     rendered_text = _shape_persian_text(text)
     draw = ImageDraw.Draw(frame)
     bbox = draw.textbbox((0, 0), rendered_text, font=font_bold)
@@ -499,7 +498,6 @@ def draw_centered_bold_text(
     tx = max(10, (box_w - tw) // 2)
     ty = max(8, (box_h - th) // 2)
 
-    # حاشیه/سایه ضخیم‌تر برای ضخامت و خوانایی بیشتر فونت بولد
     for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-2, -2), (2, 2), (-2, 2), (2, -2)):
         tdraw.text((tx + ox, ty + oy), rendered_text, font=font_bold, fill=(0, 0, 0, 240))
 
@@ -536,7 +534,7 @@ def build_synced_reel(
 ) -> tuple[bool, str]:
     """
     بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
-    صدای اصلی ویدئو را قطع می‌کند، اکولایزر تیزتر و متن بولد هماهنگ با خواننده را روی بک‌گراند می‌گذارد
+    صدای اصلی ویدئو را قطع می‌کند، اکولایزر تیزتر و متن بولد فارسی هماهنگ با خواننده را روی بک‌گراند می‌گذارد
     و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را در پایین صفحه قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
@@ -750,7 +748,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر تیزتر، متن بولد هماهنگ با خواننده و واترماک ثابت پایین آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با فونت بولد فارسی، اکولایزر تیزتر و واترماک ثابت پایین آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
