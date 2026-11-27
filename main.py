@@ -325,8 +325,9 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
                         if len(RECENT_CAPTIONS) > 15:
                             RECENT_CAPTIONS = RECENT_CAPTIONS[-15:]
                         return first_line
-    except Exception as e:
-        log(f"AI Music Description Error: {e}")
+  except Exception as e:
+      log(f"AI Music Description Error ({type(e).__name__}): {repr(e)}")
+
 
     return random.choice(FALLBACK_MUSIC_CAPTIONS)
 
