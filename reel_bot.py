@@ -5,6 +5,8 @@ import tempfile
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from reel_maker import (
+    CUSTOM_FONT_PATH,
+    FONTS_DIR,
     build_synced_reel,
     cut_audio_segment,
     test_voicemaker_transcription,
@@ -62,23 +64,70 @@ def _is_video_or_photo(msg) -> bool:
     return False
 
 
+def _is_font_file(msg) -> bool:
+    if not msg or not msg.document:
+        return False
+    fname = ""
+    for attr in msg.document.attributes:
+        if hasattr(attr, "file_name") and attr.file_name:
+            fname = attr.file_name.lower()
+            break
+    return fname.endswith((".ttf", ".otf"))
+
+
 @client.on(events.NewMessage(pattern=r"^/start(?:\s|$)"))
 async def handle_start(event):
     await event.reply(
         "ربات آماده است:\n\n"
-        "1️⃣ **برش موزیک (تا ۶۰ ثانیه) و تست خودکار تبدیل متن:**\n"
-        "روی فایل موزیک ریپلای کنید و بنویسید:\n"
-        "`.cut 00:00 01:00`\n\n"
-        "2️⃣ **ثبت بک‌گراند ریلز (ویدئو یا عکس خام بدون واترماک):**\n"
-        "روی ویدئو یا عکس ریپلای کنید و بنویسید:\n"
-        "`.setbg`\n\n"
-        "3️⃣ **ثبت متن دستی به‌صورت جداگانه:**\n"
-        "`.settext متن دستی با ایموجی`\n\n"
-        "4️⃣ **ساخت ریلز (تا ۶۰ ثانیه):**\n"
-        "روی فایل موزیک ریپلای کنید و بنویسید:\n"
-        "`.reel 00:00 01:00` (از متن دستی ثبت‌شده استفاده می‌کند)\n"
-        "یا: `.reel 00:00 01:00 | متن لحظه‌ای`"
+        "1️⃣ **برش موزیک (تا ۶۰ ثانیه) و تست سایت:**\n"
+        "روی موزیک ریپلای کنید: `.cut 00:00 01:00`\n\n"
+        "2️⃣ **ثبت بک‌گراند ریلز (ویدئو یا عکس خام):**\n"
+        "روی ویدئو/عکس ریپلای کنید: `.setbg`\n\n"
+        "3️⃣ **ثبت فونت دلخواه (اختیاری):**\n"
+        "روی فایل `.ttf` یا `.otf` ریپلای کنید: `.setfont`\n"
+        "(بازگشت به فونت ظریف پیش‌فرض: `.resetfont`)\n\n"
+        "4️⃣ **ثبت متن دستی (ساده یا زمان‌بندی‌شده):**\n"
+        "`.settext متن خط اول`\n"
+        "یا با زمان دقیق:\n"
+        "`.settext`\n"
+        "`00:02 خط اول`\n"
+        "`00:06 خط دوم`\n\n"
+        "5️⃣ **ساخت ریلز:**\n"
+        "روی موزیک ریپلای کنید: `.reel 00:00 01:00`"
     )
+
+
+@client.on(events.NewMessage(pattern=r"^\.setfont(?:\s|$)"))
+async def handle_setfont(event):
+    reply = await event.get_reply_message()
+    if not _is_font_file(reply):
+        await event.reply("❌ روی یک فایل فونت (`.ttf` یا `.otf`) ریپلای کنید و بنویسید `.setfont`")
+        return
+
+    os.makedirs(FONTS_DIR, exist_ok=True)
+    if os.path.exists(CUSTOM_FONT_PATH):
+        os.remove(CUSTOM_FONT_PATH)
+
+    downloaded = await reply.download_media(file=CUSTOM_FONT_PATH)
+    if (
+        downloaded
+        and os.path.exists(downloaded)
+        and os.path.abspath(downloaded) != os.path.abspath(CUSTOM_FONT_PATH)
+    ):
+        os.replace(downloaded, CUSTOM_FONT_PATH)
+
+    if not os.path.exists(CUSTOM_FONT_PATH) or os.path.getsize(CUSTOM_FONT_PATH) < 5000:
+        await event.reply("❌ ذخیره فونت ناموفق بود.")
+        return
+
+    await event.reply("✅ فونت دلخواه ثبت شد و با سایز ظریف مینیمال استفاده می‌شود.")
+
+
+@client.on(events.NewMessage(pattern=r"^\.resetfont(?:\s|$)"))
+async def handle_resetfont(event):
+    if os.path.exists(CUSTOM_FONT_PATH):
+        os.remove(CUSTOM_FONT_PATH)
+    await event.reply("✅ فونت به حالت ظریف و مینیمال پیش‌فرض بازگشت.")
 
 
 @client.on(events.NewMessage(pattern=r"^\.settext(?:\s+([\s\S]+))?$"))
@@ -94,7 +143,7 @@ async def handle_settext(event):
         return
 
     _save_manual_text(manual_txt)
-    await event.reply("✅ متن دستی ثبت شد. حالا می‌توانید با `.reel 00:00 01:00` ریلز را بسازید.")
+    await event.reply("✅ متن دستی ثبت شد. حالا روی موزیک ریپلای کنید و `.reel 00:00 01:00` بزنید.")
 
 
 @client.on(events.NewMessage(pattern=r"^\.setbg(?:\s|$)"))
@@ -164,7 +213,7 @@ async def handle_cut(event):
             caption = (
                 f"🎵 برش {dur:.0f} ثانیه‌ای آماده شد.\n"
                 f"⚠️ تست خودکار سایت نتیجه نداد: {site_msg}\n"
-                f"لطفاً فایل را دستی تبدیل کنید، متن را با `.settext متن` ثبت کنید و با:\n"
+                f"متن را با `.settext متن` ثبت کنید و بعد با:\n"
                 f"`.reel {start_str} {end_str}`\n"
                 f"ریلز را بسازید."
             )
@@ -200,7 +249,7 @@ async def handle_reel(event):
         return
 
     start_str, end_str = time_tokens[0], time_tokens[1]
-    status = await event.reply("🎬 در حال ساخت ریلز با اکولایزر خطی و متن بولد...")
+    status = await event.reply("🎬 در حال ساخت ریلز با فونت ظریف مینیمال و سینک خواننده...")
     _log(f"درخواست ساخت ریلز دریافت شد: {start_str} تا {end_str}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
