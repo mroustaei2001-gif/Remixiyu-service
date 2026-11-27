@@ -9,6 +9,7 @@ IG_LOGO_PATH = "ig_logo.png"
 MAX_DURATION = 60
 WIDTH = 1080
 HEIGHT = 1920
+FPS = 24
 
 
 def ensure_default_logos():
@@ -146,19 +147,21 @@ def build_reel_video(
     elif has_bg:
         bg_inputs = ["-loop", "1", "-i", bg_path]
     else:
-        bg_inputs = ["-f", "lavfi", "-i", f"color=c=#0b0e17:s={WIDTH}x{HEIGHT}:r=30"]
+        bg_inputs = ["-f", "lavfi", "-i", f"color=c=#0b0e17:s={WIDTH}x{HEIGHT}:r={FPS}"]
 
     # ورودی 1: لایه واترماک PNG
     # ورودی 2: فایل صوتی بریده‌شده
     filter_complex = (
         f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={WIDTH}:{HEIGHT},setsar=1,eq=brightness=-0.10[bg];"
+        f"crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1,eq=brightness=-0.10[bg];"
         f"[bg][1:v]overlay=0:0:shortest=1[vout]"
     )
 
     cmd = [
         "ffmpeg",
         "-y",
+        "-threads",
+        "2",
         *bg_inputs,
         "-loop",
         "1",
@@ -179,13 +182,15 @@ def build_reel_video(
         "-c:v",
         "libx264",
         "-preset",
-        "fast",
+        "ultrafast",
+        "-x264-params",
+        "rc-lookahead=10:ref=2:bframes=2",
         "-crf",
-        "23",
+        "24",
         "-c:a",
         "aac",
         "-b:a",
-        "192k",
+        "160k",
         "-pix_fmt",
         "yuv420p",
         "-t",
@@ -199,6 +204,11 @@ def build_reel_video(
             return False, "فایل ویدئویی خروجی ساخته نشد یا خالی است."
         return True, f"ریلز {duration} ثانیه‌ای ({WIDTH}x{HEIGHT}) با واترماک آماده شد."
     except subprocess.CalledProcessError as e:
+        if e.returncode == -9:
+            return (
+                False,
+                "خطا در ffmpeg (کد -9): رم سرور برای پردازش هم‌زمان کم است. یک بازه کوتاه‌تر (مثلاً ۲۰ تا ۳۰ ثانیه) تست کنید.",
+            )
         err_out = (e.stderr or b"").decode("utf-8", errors="ignore").strip()
         std_out = (e.stdout or b"").decode("utf-8", errors="ignore").strip()
         combined = f"{err_out}\n{std_out}".strip()
