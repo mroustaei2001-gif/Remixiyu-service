@@ -1,23 +1,38 @@
+import math
 import os
+import re
+import struct
 import subprocess
+import tempfile
 from PIL import Image, ImageDraw, ImageFont
 
 TG_TEXT = "t.me/remixiyu"
 IG_TEXT = "remixiyu"
-TG_LOGO_PATH = "tg_logo.png"
-IG_LOGO_PATH = "ig_logo.png"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TG_LOGO_PATH = os.path.join(BASE_DIR, "tg_logo.png")
+IG_LOGO_PATH = os.path.join(BASE_DIR, "ig_logo.png")
+
 MAX_DURATION = 60
 WIDTH = 720
 HEIGHT = 1280
 FPS = 20
+WM_ALPHA = 102  # حدود ۴۰ درصد شفافیت (0.4 * 255)
+
+# ترکیب رنگ‌های بولد و پرانرژی برای متن وسط فیلم
+COLOR_PALETTE = [
+    (255, 255, 255, 250),  # سفید درخشان
+    (255, 214, 10, 250),   # زرد طلایی
+    (120, 220, 255, 250),  # آبی یخی
+    (255, 120, 180, 250),  # صورتی نئونی
+]
 
 
 def ensure_default_logos():
-    """در صورت نبود فایل لوگو در مخزن، آیکون گرافیکی تمیز تلگرام و اینستاگرام می‌سازد."""
     if not os.path.exists(TG_LOGO_PATH):
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        draw.ellipse((2, 2, 62, 62), fill=(36, 161, 222, 240))
+        draw.ellipse((2, 2, 62, 62), fill=(36, 161, 222, 255))
         draw.polygon(
             [(16, 33), (48, 19), (41, 47), (31, 38), (26, 43), (26, 36)],
             fill=(255, 255, 255, 255),
@@ -27,7 +42,7 @@ def ensure_default_logos():
     if not os.path.exists(IG_LOGO_PATH):
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle((4, 4, 60, 60), radius=16, fill=(225, 48, 108, 240))
+        draw.rounded_rectangle((4, 4, 60, 60), radius=16, fill=(225, 48, 108, 255))
         draw.rounded_rectangle(
             (13, 13, 51, 51), radius=11, outline=(255, 255, 255, 255), width=4
         )
@@ -36,12 +51,20 @@ def ensure_default_logos():
         img.save(IG_LOGO_PATH)
 
 
-def load_font(size: int):
+def apply_opacity(img: Image.Image, alpha_factor: float) -> Image.Image:
+    rgba = img.convert("RGBA")
+    r, g, b, a = rgba.split()
+    a = a.point(lambda p: int(p * alpha_factor))
+    return Image.merge("RGBA", (r, g, b, a))
+
+
+def load_bold_font(size: int):
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
         if os.path.exists(path):
@@ -52,130 +75,352 @@ def load_font(size: int):
     return ImageFont.load_default()
 
 
-def parse_time_to_seconds(t_str: str) -> int:
-    parts = [int(x.strip()) for x in t_str.strip().split(":")]
+def load_emoji_font(size: int):
+    candidates = [
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+        "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size=size)
+            except Exception:
+                pass
+    return None
+
+
+def parse_time_to_seconds(t_str: str) -> float:
+    cleaned = t_str.strip()
+    parts = [float(x.strip()) for x in cleaned.split(":")]
     if len(parts) == 2:
-        return parts[0] * 60 + parts[1]
+        return parts[0] * 60.0 + parts[1]
     elif len(parts) == 1:
         return parts[0]
     raise ValueError("فرمت زمان نامعتبر است. مثال درست: 00:35")
 
 
-def build_watermark_layer(layer_path: str, hook_text: str = ""):
-    """یک لایه شفاف شامل واترماک لوگو + متن تلگرام و اینستاگرام می‌سازد."""
-    ensure_default_logos()
-    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(canvas)
-
-    font_wm = load_font(24)
-    font_hook = load_font(32)
-
-    # لوگو و متن تلگرام: [لوگو] + t.me/remixiyu
-    tg_y = 95
-    tg_logo = Image.open(TG_LOGO_PATH).convert("RGBA").resize((32, 32))
-    tg_x_start = 200
-    canvas.paste(tg_logo, (tg_x_start, tg_y), tg_logo)
-    draw.text(
-        (tg_x_start + 42, tg_y + 3),
-        TG_TEXT,
-        font=font_wm,
-        fill=(255, 255, 255, 225),
-    )
-
-    # لوگو و متن اینستاگرام: [لوگو] + remixiyu
-    ig_y = 138
-    ig_logo = Image.open(IG_LOGO_PATH).convert("RGBA").resize((32, 32))
-    ig_x_start = 225
-    canvas.paste(ig_logo, (ig_x_start, ig_y), ig_logo)
-    draw.text(
-        (ig_x_start + 42, ig_y + 3),
-        IG_TEXT,
-        font=font_wm,
-        fill=(255, 255, 255, 225),
-    )
-
-    # متن قلاب اختیاری
-    if hook_text.strip():
-        clean_hook = hook_text.strip()
-        bbox = draw.textbbox((0, 0), clean_hook, font=font_hook)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        hx = max(16, (WIDTH - tw) // 2)
-        hy = 230
-        pad_x, pad_y = 14, 8
-        draw.rounded_rectangle(
-            (hx - pad_x, hy - pad_y, hx + tw + pad_x, hy + th + pad_y),
-            radius=12,
-            fill=(0, 0, 0, 130),
-        )
-        draw.text((hx, hy), clean_hook, font=font_hook, fill=(255, 255, 255, 250))
-
-    canvas.save(layer_path, format="PNG")
-
-
-def build_reel_video(
-    audio_path: str,
-    output_path: str,
-    start_str: str,
-    end_str: str,
-    bg_path: str = "bg.mp4",
-    hook_text: str = "",
-) -> tuple[bool, str]:
-    if not os.path.exists(audio_path):
-        return False, "فایل صوتی ورودی یافت نشد."
+def cut_audio_segment(
+    audio_path: str, output_audio_path: str, start_str: str, end_str: str
+) -> tuple[bool, float, str]:
+    """برش دقیق موزیک بین زمان شروع و پایان (حداکثر ۶۰ ثانیه) برای تبدیل به متن."""
+    if not audio_path or not os.path.exists(audio_path):
+        return False, 0.0, "فایل موزیک یافت نشد."
 
     start_sec = parse_time_to_seconds(start_str)
     end_sec = parse_time_to_seconds(end_str)
+    if start_sec < 0 or end_sec <= start_sec:
+        return False, 0.0, "زمان پایان باید بزرگ‌تر از زمان شروع باشد."
 
-    if end_sec <= start_sec:
-        return False, "زمان پایان باید بزرگ‌تر از زمان شروع باشد."
-
-    duration = min(end_sec - start_sec, MAX_DURATION)
-
-    out_dir = os.path.dirname(output_path) or "."
-    overlay_png = os.path.join(out_dir, "watermark_overlay.png")
-    build_watermark_layer(overlay_png, hook_text=hook_text)
-
-    has_bg = os.path.exists(bg_path)
-    is_video_bg = has_bg and bg_path.lower().endswith(
-        (".mp4", ".mov", ".mkv", ".webm")
-    )
-
-    if is_video_bg:
-        bg_inputs = ["-stream_loop", "-1", "-i", bg_path]
-    elif has_bg:
-        bg_inputs = ["-loop", "1", "-i", bg_path]
-    else:
-        bg_inputs = ["-f", "lavfi", "-i", f"color=c=#0b0e17:s={WIDTH}x{HEIGHT}:r={FPS}"]
-
-    filter_complex = (
-        f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1,eq=brightness=-0.10[bg];"
-        f"[bg][1:v]overlay=0:0:shortest=1[vout]"
-    )
+    duration = min(end_sec - start_sec, float(MAX_DURATION))
 
     cmd = [
         "ffmpeg",
         "-y",
         "-threads",
         "1",
-        *bg_inputs,
-        "-loop",
-        "1",
-        "-i",
-        overlay_png,
         "-ss",
         str(start_sec),
         "-t",
         str(duration),
         "-i",
         audio_path,
-        "-filter_complex",
-        filter_complex,
+        "-vn",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
+        output_audio_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if not os.path.exists(output_audio_path) or os.path.getsize(output_audio_path) == 0:
+            return False, 0.0, "برش موزیک خروجی تولید نکرد."
+        return True, duration, f"برش {duration:.1f} ثانیه‌ای موزیک آماده شد."
+    except subprocess.CalledProcessError as e:
+        err_txt = (e.stderr or b"").decode("utf-8", errors="ignore").strip()
+        return False, 0.0, f"خطا در برش موزیک:\n{err_txt[-800:]}"
+
+
+def extract_beat_envelope(
+    audio_path: str, start_sec: float, duration: float, fps: int
+) -> list[float]:
+    """انرژی هر فریم از موزیک را استخراج می‌کند تا متن‌ها با ریتم/ضرباهنگ سینک شوند."""
+    total_frames = max(1, int(duration * fps))
+    sample_rate = 4000
+
+    with tempfile.NamedTemporaryFile(suffix=".pcm", delete=False) as tf:
+        pcm_path = tf.name
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-threads",
+        "1",
+        "-ss",
+        str(start_sec),
+        "-t",
+        str(duration),
+        "-i",
+        audio_path,
+        "-f",
+        "s16le",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        pcm_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with open(pcm_path, "rb") as f:
+            raw = f.read()
+    finally:
+        if os.path.exists(pcm_path):
+            os.remove(pcm_path)
+
+    if not raw:
+        return [0.35] * total_frames
+
+    count = len(raw) // 2
+    samples = struct.unpack(f"<{count}h", raw[: count * 2])
+    samples_per_frame = max(1, count // total_frames)
+
+    energies: list[float] = []
+    for i in range(total_frames):
+        chunk = samples[i * samples_per_frame : (i + 1) * samples_per_frame]
+        if not chunk:
+            energies.append(0.1)
+            continue
+        rms = math.sqrt(sum(s * s for s in chunk) / len(chunk)) / 32768.0
+        val = min(1.0, (rms * 4.5) ** 0.72)
+        energies.append(max(0.08, val))
+
+    return energies
+
+
+def build_rhythmic_cues(
+    lyrics_text: str, duration: float, fps: int, energies: list[float]
+) -> list[tuple[int, int, str]]:
+    """
+    متن تاییدشده را به کلمات/عبارات تقسیم کرده و بر اساس ریتم/انرژی موزیک به بازه فریم‌ها نگاشت می‌کند.
+    """
+    clean = lyrics_text.strip()
+    if not clean:
+        return []
+
+    # اگر خط‌به‌خط باشد یا با | جدا شده باشد هر بخش را به عنوان یک عبارت/کلمه ریتمیک در نظر می‌گیریم
+    chunks = [part.strip() for part in re.split(r"\n+|\s*\|\s*", clean) if part.strip()]
+    tokens: list[str] = []
+    for ch in chunks:
+        words = [w.strip() for w in ch.split() if w.strip()]
+        if len(words) <= 2:
+            tokens.append(ch)
+        else:
+            tokens.extend(words)
+
+    if not tokens:
+        return []
+
+    total_frames = max(1, int(duration * fps))
+    # وزن هر بخش ترکیبی از طول کلمه و میانگین انرژی ضرباهنگ در طول بازه
+    base_weights = [max(1.0, len(re.sub(r"\s+", "", t)) * 0.6) for t in tokens]
+    total_w = sum(base_weights)
+
+    cues: list[tuple[int, int, str]] = []
+    frame_cursor = 0
+    for idx, (tok, w) in enumerate(zip(tokens, base_weights)):
+        span = max(1, int(round(total_frames * (w / total_w))))
+        start_f = min(frame_cursor, total_frames - 1)
+        if idx == len(tokens) - 1:
+            end_f = total_frames - 1
+        else:
+            end_f = min(total_frames - 1, max(start_f, start_f + span - 1))
+
+        # تنظیم ریز بر اساس اوج ریتم در اطراف نقطه شروع
+        peak_window = energies[max(0, start_f - 2) : min(total_frames, start_f + 3)]
+        if peak_window and max(peak_window) > 0.65 and start_f > 0:
+            start_f = max(0, start_f - 1)
+
+        cues.append((start_f, end_f, tok))
+        frame_cursor = end_f + 1
+
+    return cues
+
+
+def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font_wm) -> Image.Image:
+    """واترمارک کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله برای قرارگیری ثابت در پایین صفحه."""
+    block_w = 240
+    block_h = 44  # دو ردیف ۲۲ پیکسلی زیر هم بدون فاصله
+    block = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(block)
+
+    icon_size = 20
+    row_step = 22  # بدون فاصله عمودی بین دو خط
+
+    # خط اول: آیکون + t.me/remixiyu
+    block.paste(tg_logo, (0, 1), tg_logo)
+    draw.text((icon_size + 5, 2), TG_TEXT, font=font_wm, fill=(255, 255, 255, WM_ALPHA))
+
+    # خط دوم: آیکون + remixiyu دقیقاً زیر خط اول بدون فاصله
+    block.paste(ig_logo, (0, row_step + 1), ig_logo)
+    draw.text((icon_size + 5, row_step + 2), IG_TEXT, font=font_wm, fill=(255, 255, 255, WM_ALPHA))
+
+    return block
+
+
+def draw_centered_bold_text(
+    frame: Image.Image,
+    text: str,
+    font_bold,
+    emoji_font,
+    color_rgba: tuple[int, int, int, int],
+    pulse_scale: float = 1.0,
+):
+    """متن بولد، رنگی و دارای ایموجی را دقیقاً در وسط ویدئو رسم می‌کند."""
+    draw = ImageDraw.Draw(frame)
+    bbox = draw.textbbox((0, 0), text, font=font_bold)
+    tw = max(1, bbox[2] - bbox[0])
+    th = max(1, bbox[3] - bbox[1])
+
+    # ساخت یک بوم کوچک برای متن تا بدون بهم ریختن چیدمان، پالس ریتمیک ملایم بگیرد
+    pad_x = 24
+    pad_y = 16
+    box_w = tw + pad_x * 2
+    box_h = th + pad_y * 2
+
+    txt_canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    tdraw = ImageDraw.Draw(txt_canvas)
+
+    # کادر نیمه‌شفاف تیره پشت متن برای خوانایی بالا روی هر پس‌زمینه‌ای
+    tdraw.rounded_rectangle(
+        (2, 2, box_w - 2, box_h - 2),
+        radius=16,
+        fill=(0, 0, 0, 135),
+    )
+
+    # حاشیه/سایه ضخیم برای حس بولد و برجسته
+    tx = pad_x
+    ty = pad_y
+    for ox, oy in ((-2, 0), (2, 0), (0, -2), (0, 2), (2, 2)):
+        tdraw.text((tx + ox, ty + oy), text, font=font_bold, fill=(0, 0, 0, 220))
+
+    tdraw.text((tx, ty), text, font=font_bold, fill=color_rgba)
+
+    # در صورت موجود بودن فونت ایموجی رنگی روی سرور، تلاش برای رندر ایموجی
+    if emoji_font is not None:
+        emoji_chars = "".join(ch for ch in text if ord(ch) > 0x1F300)
+        if emoji_chars:
+            try:
+                ebbox = tdraw.textbbox((0, 0), emoji_chars, font=emoji_font)
+                ew = max(1, ebbox[2] - ebbox[0])
+                eh = max(1, ebbox[3] - ebbox[1])
+                tdraw.text(
+                    (box_w - ew - 10, max(2, (box_h - eh) // 2)),
+                    emoji_chars,
+                    font=emoji_font,
+                    embedded_color=True,
+                )
+            except Exception:
+                pass
+
+    scaled_w = max(1, int(box_w * pulse_scale))
+    scaled_h = max(1, int(box_h * pulse_scale))
+    if (scaled_w, scaled_h) != (box_w, box_h):
+        txt_canvas = txt_canvas.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR)
+
+    paste_x = max(10, (WIDTH - scaled_w) // 2)
+    paste_y = max(10, (HEIGHT - scaled_h) // 2)
+    frame.paste(txt_canvas, (paste_x, paste_y), txt_canvas)
+
+
+def build_synced_reel(
+    video_path: str,
+    audio_path: str,
+    output_path: str,
+    start_str: str,
+    end_str: str,
+    lyrics_text: str,
+) -> tuple[bool, str]:
+    """
+    ویدئوی بدون واترماک را با موزیک ۶۰ ثانیه‌ای و متن ریتماتیک وسط صفحه ترکیب می‌کند
+    و واترماک کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را ثابت در پایین صفحه قرار می‌دهد.
+    """
+    if not video_path or not os.path.exists(video_path):
+        return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
+    if not audio_path or not os.path.exists(audio_path):
+        return False, "فایل موزیک یافت نشد."
+
+    start_sec = parse_time_to_seconds(start_str)
+    end_sec = parse_time_to_seconds(end_str)
+    if start_sec < 0 or end_sec <= start_sec:
+        return False, "زمان پایان باید بزرگ‌تر از زمان شروع باشد."
+
+    duration = min(end_sec - start_sec, float(MAX_DURATION))
+    energies = extract_beat_envelope(audio_path, start_sec, duration, FPS)
+    cues = build_rhythmic_cues(lyrics_text, duration, FPS, energies)
+
+    ensure_default_logos()
+    opacity = WM_ALPHA / 255.0
+    font_wm = load_bold_font(18)
+    font_center = load_bold_font(42)
+    emoji_font = load_emoji_font(42)
+
+    tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((20, 20)), opacity)
+    ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((20, 20)), opacity)
+    wm_block = make_fixed_bottom_watermark(tg_logo, ig_logo, font_wm)
+    wm_w, wm_h = wm_block.size
+
+    # ثابت در پایین صفحه و در عرض وسط
+    fixed_wm_x = (WIDTH - wm_w) // 2
+    fixed_wm_y = HEIGHT - wm_h - 48
+
+    is_video = video_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
+    vid_input = ["-stream_loop", "-1", "-i", video_path] if is_video else ["-loop", "1", "-i", video_path]
+
+    dec_cmd = [
+        "ffmpeg",
+        "-y",
+        "-threads",
+        "1",
+        *vid_input,
+        "-vf",
+        f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1",
+        "-t",
+        str(duration),
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-",
+    ]
+
+    enc_cmd = [
+        "ffmpeg",
+        "-y",
+        "-threads",
+        "1",
+        "-f",
+        "rawvideo",
+        "-vcodec",
+        "rawvideo",
+        "-s",
+        f"{WIDTH}x{HEIGHT}",
+        "-pix_fmt",
+        "rgb24",
+        "-r",
+        str(FPS),
+        "-i",
+        "-",
+        "-ss",
+        str(start_sec),
+        "-t",
+        str(duration),
+        "-i",
+        audio_path,
         "-map",
-        "[vout]",
+        "0:v",
         "-map",
-        "2:a",
+        "1:a",
         "-c:v",
         "libx264",
         "-preset",
@@ -197,18 +442,69 @@ def build_reel_video(
         output_path,
     ]
 
+    dec_proc = subprocess.Popen(dec_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    enc_proc = subprocess.Popen(enc_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    frame_bytes_len = WIDTH * HEIGHT * 3
+    total_frames = max(1, int(duration * FPS))
+
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for f_idx in range(total_frames):
+            raw_frame = dec_proc.stdout.read(frame_bytes_len) if dec_proc.stdout else b""
+            if not raw_frame or len(raw_frame) < frame_bytes_len:
+                break
+
+            frame = Image.frombytes("RGB", (WIDTH, HEIGHT), raw_frame).convert("RGBA")
+            amp = energies[f_idx] if f_idx < len(energies) else 0.2
+
+            # یافتن متن فعال در لحظه فعلی بر اساس سینک ریتماتیک
+            active_text = ""
+            cue_index = 0
+            for idx, (s_f, e_f, tok) in enumerate(cues):
+                if s_f <= f_idx <= e_f:
+                    active_text = tok
+                    cue_index = idx
+                    break
+
+            if active_text:
+                color_rgba = COLOR_PALETTE[cue_index % len(COLOR_PALETTE)]
+                pulse_scale = 1.0 + min(0.12, amp * 0.12)
+                draw_centered_bold_text(
+                    frame=frame,
+                    text=active_text,
+                    font_bold=font_center,
+                    emoji_font=emoji_font,
+                    color_rgba=color_rgba,
+                    pulse_scale=pulse_scale,
+                )
+
+            # واترماک ثابت در پایین صفحه (بدون حرکت، ۴۰٪ شفاف، زیر هم بدون فاصله)
+            frame.paste(wm_block, (fixed_wm_x, fixed_wm_y), wm_block)
+
+            if enc_proc.stdin:
+                enc_proc.stdin.write(frame.convert("RGB").tobytes())
+
+        if dec_proc.stdout:
+            dec_proc.stdout.close()
+        if enc_proc.stdin:
+            enc_proc.stdin.close()
+
+        dec_proc.wait()
+        _, enc_err = enc_proc.communicate()
+
+        if enc_proc.returncode != 0:
+            err_txt = (enc_err or b"").decode("utf-8", errors="ignore").strip()
+            if enc_proc.returncode == -9:
+                return False, "خطا در ffmpeg (کد -9): رم کانتینر در لحظه انکود پر شد."
+            return False, f"خطا در ffmpeg (کد {enc_proc.returncode}):\n{err_txt[-1000:]}"
+
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            return False, "فایل ویدئویی خروجی ساخته نشد یا خالی است."
-        return True, f"ریلز {duration} ثانیه‌ای ({WIDTH}x{HEIGHT}) با واترماک آماده شد."
-    except subprocess.CalledProcessError as e:
-        if e.returncode == -9:
-            return (
-                False,
-                "خطا در ffmpeg (کد -9): حتی با تنظیمات کم‌مصرف هم رم کانتینر پر شد. برای ساخت ریلز به رم بیشتر یا اجرای جداگانه نیاز است.",
-            )
-        err_out = (e.stderr or b"").decode("utf-8", errors="ignore").strip()
-        std_out = (e.stdout or b"").decode("utf-8", errors="ignore").strip()
-        combined = f"{err_out}\n{std_out}".strip()
-        return False, f"خطا در ffmpeg (کد {e.returncode}):\n{combined[-1400:] or 'جزئیاتی ثبت نشد'}"
+            return False, "فایل ویدئویی نهایی ساخته نشد."
+
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با سینک ریتماتیک، متن وسط و واترماک ثابت پایین آماده شد."
+
+    except Exception as e:
+        for p in (dec_proc, enc_proc):
+            if p.poll() is None:
+                p.kill()
+        return False, f"خطا در ساخت ویدئو: {str(e)[:300]}"
