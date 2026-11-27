@@ -699,10 +699,11 @@ async def broadcast_package(include_photo: bool, label: str) -> bool:
                 f"<b>full music ✅️⏯️</b>\n"
                 f'<a href="{proxy_link}"><b>proxy</b></a>\n\n'
                 f"<b>🎧 پارت دمو (لمس کنید) ⇦ {timestamp_str}</b>\n\n"
-                f"<blockquote><b>{ai_desc}</b></blockquote>\n\n"
+                f"<blockquote><b>{ai_desc}</b></blockquote>\n"
                 f'<blockquote><a href="{channel_link}"><b>🎷&nbsp;&nbsp;معرفی بهترین ریمیکسها&nbsp;&nbsp;🎼</b></a></blockquote>\n'
                 f"<blockquote><b>🆔 @{clean_target}</b></blockquote>"
             )
+
 
             prepared_tracks.append({
                 "temp_demo": temp_demo,
