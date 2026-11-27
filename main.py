@@ -34,6 +34,14 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 STRING_SESSION = os.getenv('STRING_SESSION', '')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
 
+# اختیاری: هوش مصنوعی جایگزین (سازگار با OpenAI Chat Completions API)
+FALLBACK_AI_API_KEY = os.getenv('FALLBACK_AI_API_KEY', '').strip()
+FALLBACK_AI_BASE_URL = os.getenv('FALLBACK_AI_BASE_URL', 'https://api.openai.com/v1').strip().rstrip('/')
+FALLBACK_AI_MODEL = os.getenv('FALLBACK_AI_MODEL', 'gpt-4o-mini').strip()
+
+# حداکثر تعداد تلاش سریع هوش مصنوعی اصلی پیش از سوییچ به جایگزین / جملات ترغیب‌کننده
+AI_MAX_ATTEMPTS = int(os.getenv('AI_MAX_ATTEMPTS', '2'))
+
 # ==========================================
 # تنظیمات حالت تست (پس از اتمام تست در Railway مقدار TEST_MODE را false بگذارید)
 # ==========================================
@@ -73,12 +81,16 @@ SOURCE_PHOTO_CHANNELS = [
     'PLAYVIBES'
 ]
 
-# جملات جایگزین کوتاه، حسی و ترغیب‌کننده (در صورت نبود کلید AI یا عدم اطمینان)
+# جملات کوتاه، حسی و ترغیب‌کننده برای نگه داشتن و گوش دادن به موزیک
 FALLBACK_MUSIC_CAPTIONS = [
     "حیفِ رد کردنشه، نگهش دار 🤍",
     "اینو بذار تو لیستِ خاص‌هات 🎧",
     "حال‌وهواش ارزش گوش دادن داره ✨",
-    "نگه‌دارش برای لحظه‌های دلخواهت 🌙"
+    "نگه‌دارش برای لحظه‌های دلخواهت 🌙",
+    "وایبش ته دلت می‌مونه، سیو کن 🖤",
+    "این ترک رو از دست نده 🔥",
+    "همراهِ لحظه‌های نابِ تو می‌شه 💫",
+    "فقط کافیه پلی کنی و ببری 🎶"
 ]
 
 COVER_PATH = "cover.png"
@@ -184,14 +196,110 @@ def get_clean_artist(performer: str) -> str:
     return "" if is_promotional_tag(cleaned) else cleaned
 
 
-async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
-    if CACHED_GEMINI_MODEL:
-        return [CACHED_GEMINI_MODEL]
+def register_caption_and_return(caption: str) -> str:
+    first_line = next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
+    if not first_line:
+        return pick_fallback_caption()
+    RECENT_CAPTIONS.append(first_line)
+    if len(RECENT_CAPTIONS) > 15:
+        RECENT_CAPTIONS[:] = RECENT_CAPTIONS[-15:]
+    return first_line
 
+
+def pick_fallback_caption() -> str:
+    available = [c for c in FALLBACK_MUSIC_CAPTIONS if c not in RECENT_CAPTIONS[-4:]]
+    chosen = random.choice(available or FALLBACK_MUSIC_CAPTIONS)
+    RECENT_CAPTIONS.append(chosen)
+    if len(RECENT_CAPTIONS) > 15:
+        RECENT_CAPTIONS[:] = RECENT_CAPTIONS[-15:]
+    return chosen
+
+
+def create_light_sample_for_ai(source_audio_path: str) -> str:
+    """ساخت یک برش ۱۰ ثانیه‌ای کم‌حجم از فایل صوتی برای ارسال سریع به هوش مصنوعی."""
+    sample_path = source_audio_path + ".ai_sample.ogg"
+    try:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", source_audio_path,
+            "-t", "10",
+            "-vn",
+            "-c:a", "libopus",
+            "-b:a", "24k",
+            "-ar", "16000",
+            "-ac", "1",
+            sample_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res.returncode == 0 and os.path.exists(sample_path) and os.path.getsize(sample_path) > 0:
+            return sample_path
+    except Exception:
+        pass
+    if os.path.exists(sample_path):
+        try:
+            os.remove(sample_path)
+        except Exception:
+            pass
+    return source_audio_path
+
+
+def build_vibe_prompt(track_name: str, artist_name: str, is_audio_included: bool) -> str:
+    avoid_block = ""
+    if RECENT_CAPTIONS:
+        recent_str = "\n".join(f"- {c}" for c in RECENT_CAPTIONS[-10:])
+        avoid_block = (
+            "\nجملات زیر اخیراً استفاده شده‌اند؛ اکیداً این جملات یا ساختار مشابه آن‌ها را تکرار نکن:\n"
+            f"{recent_str}\n"
+        )
+
+    source_hint = (
+        "ملاک اصلی تو فقط خودِ صدا، لحن خواننده، متن شعر و فضای واقعی فایل صوتی است.\n"
+        if is_audio_included else
+        "بر اساس نام و فضای ترک، یک جمله وایبی و حسی بساز.\n"
+    )
+
+    return (
+        f"این ترک یک ریمیکس/آهنگ با عنوان «{track_name}»"
+        f"{f' و هنرمند «{artist_name}»' if artist_name else ''} است.\n"
+        f"{source_hint}"
+        "خروجی را دقیقاً به صورت یک JSON معتبر با این فیلدها برگردان:\n"
+        '{\n'
+        '  "mood": "حس و فضای واقعی صدا (مثلاً gym/workout, energetic, nostalgic, dark, romantic, chill)",\n'
+        '  "confidence": "high یا low",\n'
+        '  "caption": "یک جمله کوتاه، حسی، کاملاً هماهنگ با وایب واقعی آهنگ و ترغیب‌کننده برای گوش دادن/نگه داشتن آن (۳ تا ۶ کلمه) با فقط ۱ ایموجی در انتها"\n'
+        '}\n\n'
+        "قوانین بسیار مهم برای caption:\n"
+        "- باید دقیقاً با فضای واقعی صدا جور در بیاید؛ مثلاً اگر حال‌وهوای باشگاهی و پرانرژی دارد، در همان حال‌وهوای باشگاه و حرکت بنویس؛ اگر شبانه و خلوت است، در همان فضا بنویس.\n"
+        "- هم حال‌وهوای حسی آهنگ را نشان بدهد و هم مخاطب را به صورت لطیف و بی‌تکلف برای گوش دادن و نگه داشتن فایل ترغیب کند.\n"
+        "- از اصطلاحات فنی مثل «ضرب‌آهنگ»، «ریتم»، «بیت»، «تمپو»، «انرژی مطلق» و نقد موسیقی استفاده نکن.\n"
+        "- از هشتگ و برچسب‌های کلیشه‌ای مثل «فاز سنگین» یا «فاز دور دور» استفاده نکن.\n"
+        "- جمله کوتاه باشد (۳ تا ۶ کلمه، زیر ۳۵ کاراکتر) تا در ۱ خط مرتب جا بگیرد و دقیقاً فقط ۱ ایموجی در انتها داشته باشد.\n"
+        "- هر بار یک جمله تازه و متفاوت بساز و جملات تکراری ننویس.\n"
+        "- اگر از حس آهنگ مطمئن نبودی، confidence را low بگذار و یک جمله کوتاه و خنثی بنویس."
+        f"{avoid_block}"
+    )
+
+
+def parse_ai_json_caption(raw_text: str) -> str:
+    if not raw_text:
+        return ""
+    cleaned = re.sub(r'^```(?:json)?\s*', '', raw_text.strip())
+    cleaned = re.sub(r'\s*```$', '', cleaned).strip()
+    parsed = json.loads(cleaned)
+    confidence = str(parsed.get("confidence", "high")).lower()
+    caption = str(parsed.get("caption", "")).strip()
+    mood = str(parsed.get("mood", "")).strip()
+    log(f"AI Vibe Analysis -> mood: {mood}, confidence: {confidence}, caption: {caption}")
+    if confidence != "low" and caption:
+        return next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
+    return ""
+
+
+async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     candidates = []
     try:
-        async with session.get(list_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(list_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 models = data.get("models") or []
@@ -202,70 +310,86 @@ async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
                 ]
                 flash_models = [n for n in valid_names if "flash" in n.lower()]
                 flash_models.sort(key=lambda x: (
-                    0 if "latest" in x else (1 if "3" in x else (2 if "2.5" in x else 3)),
+                    0 if "lite" in x else (1 if "latest" in x else 2),
                     x
                 ))
                 candidates = flash_models + [n for n in valid_names if n not in flash_models]
     except Exception as e:
         log(f"List Models Exception ({type(e).__name__}): {repr(e)}")
 
-    return candidates or ["gemini-flash-latest", "gemini-2.5-flash-lite"]
+    default_list = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-flash-latest"]
+    if CACHED_GEMINI_MODEL:
+        return [CACHED_GEMINI_MODEL] + [m for m in (candidates or default_list) if m != CACHED_GEMINI_MODEL]
+    return candidates or default_list
+
+
+async def try_fallback_ai(session: aiohttp.ClientSession, track_name: str, artist_name: str) -> str:
+    """تلاش سریع روی هوش مصنوعی جایگزین در صورت عدم موفقیت Gemini در مهلت مقرر."""
+    if not FALLBACK_AI_API_KEY or not FALLBACK_AI_BASE_URL:
+        return ""
+
+    url = f"{FALLBACK_AI_BASE_URL}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {FALLBACK_AI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    prompt = build_vibe_prompt(track_name, artist_name, is_audio_included=False)
+    payload = {
+        "model": FALLBACK_AI_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.85,
+        "max_tokens": 140,
+    }
+
+    try:
+        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                choices = data.get("choices") or []
+                if choices:
+                    content = ((choices[0].get("message") or {}).get("content") or "").strip()
+                    cap = parse_ai_json_caption(content)
+                    if cap:
+                        log(f"Fallback AI succeeded ({FALLBACK_AI_MODEL}): {cap}")
+                        return cap
+            else:
+                err_txt = await resp.text()
+                log(f"Fallback AI HTTP {resp.status}: {err_txt[:150]}")
+    except Exception as e:
+        log(f"Fallback AI Error ({type(e).__name__}): {repr(e)}")
+
+    return ""
 
 
 async def generate_ai_music_description(audio_file_path: str, track_name: str, artist_name: str) -> str:
-    """تشخیص موقعیت و وایب واقعی صدا توسط Gemini و ساخت جمله کوتاهِ هماهنگ با ترک."""
-    global CACHED_GEMINI_MODEL, RECENT_CAPTIONS
+    """تلاش محدود و سریع روی Gemini؛ در صورت عدم نتیجه، سوییچ به هوش مصنوعی جایگزین یا جملات ترغیب‌کننده."""
+    global CACHED_GEMINI_MODEL
 
-    if not GEMINI_API_KEY or not os.path.exists(audio_file_path):
-        return random.choice(FALLBACK_MUSIC_CAPTIONS)
+    if not os.path.exists(audio_file_path):
+        return pick_fallback_caption()
 
-    file_size = os.path.getsize(audio_file_path)
-    if file_size <= 0 or file_size > 15 * 1024 * 1024:
-        return random.choice(FALLBACK_MUSIC_CAPTIONS)
-
-    ext = os.path.splitext(audio_file_path)[1].lower()
-    mime_map = {
-        ".mp3": "audio/mp3",
-        ".ogg": "audio/ogg",
-        ".opus": "audio/ogg",
-        ".wav": "audio/wav",
-        ".m4a": "audio/mp4",
-    }
-    mime_type = mime_map.get(ext, "audio/mpeg")
+    sample_path = create_light_sample_for_ai(audio_file_path)
+    cleanup_sample = (sample_path != audio_file_path)
 
     try:
-        with open(audio_file_path, "rb") as f:
+        file_size = os.path.getsize(sample_path)
+        if file_size <= 0 or file_size > 5 * 1024 * 1024:
+            return pick_fallback_caption()
+
+        ext = os.path.splitext(sample_path)[1].lower()
+        mime_map = {
+            ".mp3": "audio/mp3",
+            ".ogg": "audio/ogg",
+            ".opus": "audio/ogg",
+            ".wav": "audio/wav",
+            ".m4a": "audio/mp4",
+        }
+        mime_type = mime_map.get(ext, "audio/ogg")
+
+        with open(sample_path, "rb") as f:
             b64_audio = base64.b64encode(f.read()).decode("ascii")
 
-        avoid_block = ""
-        if RECENT_CAPTIONS:
-            recent_str = "\n".join(f"- {c}" for c in RECENT_CAPTIONS[-10:])
-            avoid_block = (
-                "\nجملات زیر اخیراً استفاده شده‌اند؛ اکیداً این جملات یا ساختار مشابه آن‌ها را تکرار نکن:\n"
-                f"{recent_str}\n"
-            )
-
-        prompt = (
-            f"این فایل صوتی یک ریمیکس/آهنگ با عنوان «{track_name}»"
-            f"{f' و هنرمند «{artist_name}»' if artist_name else ''} است.\n"
-            "ملاک اصلی تو فقط خودِ صدا، لحن خواننده، متن شعر و فضای واقعی فایل صوتی است.\n"
-            "خروجی را دقیقاً به صورت یک JSON معتبر با این فیلدها برگردان:\n"
-            '{\n'
-            '  "mood": "حس و فضای واقعی صدا (مثلاً gym/workout, energetic, nostalgic, dark, romantic, chill)",\n'
-            '  "confidence": "high یا low",\n'
-            '  "caption": "یک جمله کوتاه، حسی، کاملاً هماهنگ با وایب واقعی آهنگ و ترغیب‌کننده برای گوش دادن/نگه داشتن آن (۳ تا ۶ کلمه) با فقط ۱ ایموجی در انتها"\n'
-            '}\n\n'
-            "قوانین بسیار مهم برای caption:\n"
-            "- باید دقیقاً با فضای واقعی صدا جور در بیاید؛ مثلاً اگر حال‌وهوای باشگاهی و پرانرژی دارد، در همان حال‌وهوای باشگاه و حرکت بنویس؛ اگر شبانه و خلوت است، در همان فضا بنویس.\n"
-            "- هم حال‌وهوای حسی آهنگ را نشان بدهد و هم مخاطب را به صورت لطیف و بی‌تکلف برای گوش دادن و نگه داشتن فایل ترغیب کند.\n"
-            "- از اصطلاحات فنی مثل «ضرب‌آهنگ»، «ریتم»، «بیت»، «تمپو»، «انرژی مطلق» و نقد موسیقی استفاده نکن.\n"
-            "- از هشتگ و برچسب‌های کلیشه‌ای مثل «فاز سنگین» یا «فاز دور دور» استفاده نکن.\n"
-            "- جمله کوتاه باشد (۳ تا ۶ کلمه، زیر ۳۵ کاراکتر) تا در ۱ خط مرتب جا بگیرد و دقیقاً فقط ۱ ایموجی در انتها داشته باشد.\n"
-            "- هر بار یک جمله تازه و متفاوت بساز و جملات تکراری ننویس.\n"
-            "- اگر از حس آهنگ مطمئن نبودی، confidence را low بگذار و یک جمله کوتاه و خنثی بنویس."
-            f"{avoid_block}"
-        )
-
+        prompt = build_vibe_prompt(track_name, artist_name, is_audio_included=True)
         payload = {
             "contents": [
                 {
@@ -282,54 +406,59 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
             ],
             "generationConfig": {
                 "temperature": 0.85,
-                "maxOutputTokens": 200,
+                "maxOutputTokens": 180,
                 "responseMimeType": "application/json",
             },
         }
 
-        async with aiohttp.ClientSession() as session:
-            models_to_try = await get_candidate_gemini_models(session)
-            data = None
+        connector = aiohttp.TCPConnector(limit=4, force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            if GEMINI_API_KEY:
+                models_to_try = await get_candidate_gemini_models(session)
+                max_tries = max(1, min(AI_MAX_ATTEMPTS, len(models_to_try)))
 
-            for model_name in models_to_try[:6]:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
-                    if resp.status == 200:
-                        CACHED_GEMINI_MODEL = model_name
-                        log(f"Working Gemini model locked: {model_name}")
-                        data = await resp.json()
-                        break
-                    else:
-                        err_body = await resp.text()
-                        log(f"AI HTTP {resp.status} ({model_name}): {err_body[:180]}")
+                for model_name in models_to_try[:max_tries]:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+                    try:
+                        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status == 200:
+                                CACHED_GEMINI_MODEL = model_name
+                                data = await resp.json()
+                                candidates = data.get("candidates") or []
+                                if candidates:
+                                    parts = ((candidates[0].get("content") or {}).get("parts")) or []
+                                    raw_text = " ".join(
+                                        p.get("text", "") for p in parts
+                                        if isinstance(p, dict) and p.get("text")
+                                    ).strip()
+                                    cap = parse_ai_json_caption(raw_text)
+                                    if cap:
+                                        return register_caption_and_return(cap)
+                            else:
+                                err_body = await resp.text()
+                                log(f"AI HTTP {resp.status} ({model_name}): {err_body[:150]}")
+                                if CACHED_GEMINI_MODEL == model_name:
+                                    CACHED_GEMINI_MODEL = None
+                    except Exception as req_err:
+                        log(f"AI Attempt Error ({model_name} - {type(req_err).__name__}): {repr(req_err)}")
+                        if CACHED_GEMINI_MODEL == model_name:
+                            CACHED_GEMINI_MODEL = None
 
-        if not data:
-            return random.choice(FALLBACK_MUSIC_CAPTIONS)
+            log("Primary AI did not reach result in time; trying fallback AI / persuasive captions...")
+            fallback_ai_cap = await try_fallback_ai(session, track_name, artist_name)
+            if fallback_ai_cap:
+                return register_caption_and_return(fallback_ai_cap)
 
-        candidates = data.get("candidates") or []
-        if candidates:
-            parts = ((candidates[0].get("content") or {}).get("parts")) or []
-            raw_text = " ".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")).strip()
-            if raw_text:
-                raw_text = re.sub(r'^```(?:json)?\s*', '', raw_text)
-                raw_text = re.sub(r'\s*```$', '', raw_text)
-                parsed = json.loads(raw_text)
-                confidence = str(parsed.get("confidence", "high")).lower()
-                caption = str(parsed.get("caption", "")).strip()
-                mood = str(parsed.get("mood", "")).strip()
-                log(f"AI Vibe Analysis -> mood: {mood}, confidence: {confidence}, caption: {caption}")
-
-                if confidence != "low" and caption:
-                    first_line = next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
-                    if first_line:
-                        RECENT_CAPTIONS.append(first_line)
-                        if len(RECENT_CAPTIONS) > 15:
-                            RECENT_CAPTIONS = RECENT_CAPTIONS[-15:]
-                        return first_line
     except Exception as e:
         log(f"AI Music Description Error ({type(e).__name__}): {repr(e)}")
+    finally:
+        if cleanup_sample and os.path.exists(sample_path):
+            try:
+                os.remove(sample_path)
+            except Exception:
+                pass
 
-    return random.choice(FALLBACK_MUSIC_CAPTIONS)
+    return pick_fallback_caption()
 
 
 async def ensure_connection():
