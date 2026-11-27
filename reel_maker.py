@@ -7,9 +7,9 @@ IG_TEXT = "remixiyu"
 TG_LOGO_PATH = "tg_logo.png"
 IG_LOGO_PATH = "ig_logo.png"
 MAX_DURATION = 60
-WIDTH = 1080
-HEIGHT = 1920
-FPS = 24
+WIDTH = 720
+HEIGHT = 1280
+FPS = 20
 
 
 def ensure_default_logos():
@@ -62,33 +62,33 @@ def parse_time_to_seconds(t_str: str) -> int:
 
 
 def build_watermark_layer(layer_path: str, hook_text: str = ""):
-    """یک لایه شفاف 1080x1920 شامل واترماک لوگو + متن تلگرام و اینستاگرام می‌سازد."""
+    """یک لایه شفاف شامل واترماک لوگو + متن تلگرام و اینستاگرام می‌سازد."""
     ensure_default_logos()
     canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    font_wm = load_font(32)
-    font_hook = load_font(42)
+    font_wm = load_font(24)
+    font_hook = load_font(32)
 
     # لوگو و متن تلگرام: [لوگو] + t.me/remixiyu
-    tg_y = 140
-    tg_logo = Image.open(TG_LOGO_PATH).convert("RGBA").resize((42, 42))
-    tg_x_start = 295
+    tg_y = 95
+    tg_logo = Image.open(TG_LOGO_PATH).convert("RGBA").resize((32, 32))
+    tg_x_start = 200
     canvas.paste(tg_logo, (tg_x_start, tg_y), tg_logo)
     draw.text(
-        (tg_x_start + 54, tg_y + 4),
+        (tg_x_start + 42, tg_y + 3),
         TG_TEXT,
         font=font_wm,
         fill=(255, 255, 255, 225),
     )
 
     # لوگو و متن اینستاگرام: [لوگو] + remixiyu
-    ig_y = 198
-    ig_logo = Image.open(IG_LOGO_PATH).convert("RGBA").resize((42, 42))
-    ig_x_start = 335
+    ig_y = 138
+    ig_logo = Image.open(IG_LOGO_PATH).convert("RGBA").resize((32, 32))
+    ig_x_start = 225
     canvas.paste(ig_logo, (ig_x_start, ig_y), ig_logo)
     draw.text(
-        (ig_x_start + 54, ig_y + 4),
+        (ig_x_start + 42, ig_y + 3),
         IG_TEXT,
         font=font_wm,
         fill=(255, 255, 255, 225),
@@ -100,12 +100,12 @@ def build_watermark_layer(layer_path: str, hook_text: str = ""):
         bbox = draw.textbbox((0, 0), clean_hook, font=font_hook)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
-        hx = max(20, (WIDTH - tw) // 2)
-        hy = 340
-        pad_x, pad_y = 20, 12
+        hx = max(16, (WIDTH - tw) // 2)
+        hy = 230
+        pad_x, pad_y = 14, 8
         draw.rounded_rectangle(
             (hx - pad_x, hy - pad_y, hx + tw + pad_x, hy + th + pad_y),
-            radius=16,
+            radius=12,
             fill=(0, 0, 0, 130),
         )
         draw.text((hx, hy), clean_hook, font=font_hook, fill=(255, 255, 255, 250))
@@ -141,7 +141,6 @@ def build_reel_video(
         (".mp4", ".mov", ".mkv", ".webm")
     )
 
-    # ورودی 0: پس‌زمینه
     if is_video_bg:
         bg_inputs = ["-stream_loop", "-1", "-i", bg_path]
     elif has_bg:
@@ -149,8 +148,6 @@ def build_reel_video(
     else:
         bg_inputs = ["-f", "lavfi", "-i", f"color=c=#0b0e17:s={WIDTH}x{HEIGHT}:r={FPS}"]
 
-    # ورودی 1: لایه واترماک PNG
-    # ورودی 2: فایل صوتی بریده‌شده
     filter_complex = (
         f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
         f"crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1,eq=brightness=-0.10[bg];"
@@ -161,7 +158,7 @@ def build_reel_video(
         "ffmpeg",
         "-y",
         "-threads",
-        "2",
+        "1",
         *bg_inputs,
         "-loop",
         "1",
@@ -183,14 +180,16 @@ def build_reel_video(
         "libx264",
         "-preset",
         "ultrafast",
+        "-threads",
+        "1",
         "-x264-params",
-        "rc-lookahead=10:ref=2:bframes=2",
+        "threads=1:rc-lookahead=0:sync-lookahead=0:bframes=0:ref=1",
         "-crf",
-        "24",
+        "25",
         "-c:a",
         "aac",
         "-b:a",
-        "160k",
+        "128k",
         "-pix_fmt",
         "yuv420p",
         "-t",
@@ -207,7 +206,7 @@ def build_reel_video(
         if e.returncode == -9:
             return (
                 False,
-                "خطا در ffmpeg (کد -9): رم سرور برای پردازش هم‌زمان کم است. یک بازه کوتاه‌تر (مثلاً ۲۰ تا ۳۰ ثانیه) تست کنید.",
+                "خطا در ffmpeg (کد -9): حتی با تنظیمات کم‌مصرف هم رم کانتینر پر شد. برای ساخت ریلز به رم بیشتر یا اجرای جداگانه نیاز است.",
             )
         err_out = (e.stderr or b"").decode("utf-8", errors="ignore").strip()
         std_out = (e.stdout or b"").decode("utf-8", errors="ignore").strip()
