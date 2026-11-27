@@ -3,7 +3,7 @@ import sys
 import time
 
 
-SCRIPTS = ["main.py", "retention.py", "reel_bot.py"]
+SCRIPTS = ["main.py", "reel_bot.py"]
 
 
 def start_process(script_name: str) -> subprocess.Popen:
