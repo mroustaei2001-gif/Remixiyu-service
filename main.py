@@ -207,7 +207,7 @@ async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
                 ))
                 candidates = flash_models + [n for n in valid_names if n not in flash_models]
     except Exception as e:
-        log(f"List Models Exception: {e}")
+        log(f"List Models Exception ({type(e).__name__}): {repr(e)}")
 
     return candidates or ["gemini-flash-latest", "gemini-2.5-flash-lite"]
 
@@ -325,9 +325,8 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
                         if len(RECENT_CAPTIONS) > 15:
                             RECENT_CAPTIONS = RECENT_CAPTIONS[-15:]
                         return first_line
-        except Exception as e:
-            log(f"AI Music Description Error ({type(e).__name__}): {repr(e)}")
-
+    except Exception as e:
+        log(f"AI Music Description Error ({type(e).__name__}): {repr(e)}")
 
     return random.choice(FALLBACK_MUSIC_CAPTIONS)
 
