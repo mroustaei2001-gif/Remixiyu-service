@@ -179,12 +179,12 @@ def get_clean_artist(performer: str) -> str:
     return "" if is_promotional_tag(cleaned) else cleaned
 
 
-async def get_available_gemini_model(session: aiohttp.ClientSession) -> str:
-    global CACHED_GEMINI_MODEL
+async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
     if CACHED_GEMINI_MODEL:
-        return CACHED_GEMINI_MODEL
+        return [CACHED_GEMINI_MODEL]
 
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    candidates = []
     try:
         async with session.get(list_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
@@ -195,31 +195,22 @@ async def get_available_gemini_model(session: aiohttp.ClientSession) -> str:
                     for m in models
                     if "generateContent" in (m.get("supportedGenerationMethods") or [])
                 ]
-                for preferred in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"):
-                    if preferred in valid_names:
-                        CACHED_GEMINI_MODEL = preferred
-                        log(f"Selected Gemini model: {CACHED_GEMINI_MODEL}")
-                        return CACHED_GEMINI_MODEL
-                for name in valid_names:
-                    if "flash" in name.lower():
-                        CACHED_GEMINI_MODEL = name
-                        log(f"Selected Gemini model: {CACHED_GEMINI_MODEL}")
-                        return CACHED_GEMINI_MODEL
-                if valid_names:
-                    CACHED_GEMINI_MODEL = valid_names[0]
-                    log(f"Selected Gemini model: {CACHED_GEMINI_MODEL}")
-                    return CACHED_GEMINI_MODEL
-            else:
-                err_body = await resp.text()
-                log(f"List Models Error {resp.status}: {err_body[:300]}")
+                flash_models = [n for n in valid_names if "flash" in n.lower()]
+                flash_models.sort(key=lambda x: (
+                    0 if "latest" in x else (1 if "3" in x else (2 if "2.5" in x else 3)),
+                    x
+                ))
+                candidates = flash_models + [n for n in valid_names if n not in flash_models]
     except Exception as e:
         log(f"List Models Exception: {e}")
 
-    return "gemini-2.0-flash"
+    return candidates or ["gemini-flash-latest", "gemini-2.5-flash-lite"]
 
 
 async def generate_ai_music_description(audio_file_path: str, track_name: str, artist_name: str) -> str:
-    """ارسال فایل صوتی به Gemini با انتخاب خودکار مدل فعال و تحلیل JSON."""
+    """ارسال فایل صوتی به Gemini با تست خودکار مدل‌های فعال و تحلیل JSON."""
+    global CACHED_GEMINI_MODEL
+
     if not GEMINI_API_KEY or not os.path.exists(audio_file_path):
         return random.choice(FALLBACK_MUSIC_CAPTIONS)
 
@@ -284,14 +275,23 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
         }
 
         async with aiohttp.ClientSession() as session:
-            model_name = await get_available_gemini_model(session)
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
-                if resp.status != 200:
-                    err_body = await resp.text()
-                    log(f"AI HTTP {resp.status} ({model_name}): {err_body[:300]}")
-                    return random.choice(FALLBACK_MUSIC_CAPTIONS)
-                data = await resp.json()
+            models_to_try = await get_candidate_gemini_models(session)
+            data = None
+
+            for model_name in models_to_try[:6]:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
+                    if resp.status == 200:
+                        CACHED_GEMINI_MODEL = model_name
+                        log(f"Working Gemini model locked: {model_name}")
+                        data = await resp.json()
+                        break
+                    else:
+                        err_body = await resp.text()
+                        log(f"AI HTTP {resp.status} ({model_name}): {err_body[:180]}")
+
+        if not data:
+            return random.choice(FALLBACK_MUSIC_CAPTIONS)
 
         candidates = data.get("candidates") or []
         if candidates:
@@ -698,8 +698,8 @@ async def broadcast_package(include_photo: bool, label: str) -> bool:
                 f"<b>name: {track_name}</b>\n"
                 f"<b>full music ✅️⏯️</b>\n"
                 f'<a href="{proxy_link}"><b>proxy</b></a>\n\n'
-                f"<b>{ai_desc}</b>\n"
                 f"<b>🎧 پارت دمو (لمس کنید) ⇦ {timestamp_str}</b>\n\n"
+                f"<blockquote><b>{ai_desc}</b></blockquote>\n\n"
                 f'<blockquote><a href="{channel_link}"><b>🎷&nbsp;&nbsp;معرفی بهترین ریمیکسها&nbsp;&nbsp;🎼</b></a></blockquote>\n'
                 f"<blockquote><b>🆔 @{clean_target}</b></blockquote>"
             )
