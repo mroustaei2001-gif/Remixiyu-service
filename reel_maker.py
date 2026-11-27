@@ -1,10 +1,11 @@
 import math
 import os
+import random
 import struct
 import subprocess
 import sys
 import tempfile
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 TG_TEXT = "t.me/remixiyu"
 IG_TEXT = "remixiyu"
@@ -20,18 +21,18 @@ WIDTH = 720
 HEIGHT = 1280
 FPS = 20
 
-# تنظیمات کوچک و جمع‌وجور برای قرار گرفتن روی کلیپ
-WM_TEXT_ALPHA = 105        # حدود ۴۰ درصد شفافیت برای متن واترمارک
-WM_ICON_OPACITY = 0.85     # وضوح آیکون‌های تلگرام و اینستاگرام
-CHANNEL_AVATAR_SIZE = 32   # سایز جمع‌وجور و مجزا برای عکس کانال روی کلیپ
-CHANNEL_AVATAR_OPACITY = 0.92
-EQ_STYLE = "segmented_linear"
+# تنظیمات متعادل و تمیز روی کلیپ (با فضای آزاد در وسط برای متن آهنگ)
+WM_TEXT_ALPHA = 150
+WM_ICON_OPACITY = 0.92
+CHANNEL_AVATAR_SIZE = 32
+CHANNEL_AVATAR_OPACITY = 0.96
 
-EQ_COLOR_PALETTE = [
-    (0, 245, 212, 230),    # فیروزه‌ای نئونی
-    (185, 110, 255, 230),  # بنفش یاسی پرانرژی
-    (255, 159, 28, 230),   # نارنجی کهربایی
-    (72, 229, 132, 230),   # سبز نعنایی
+# پالت‌های رندومِ گرادیانی (هر کلیپ یک پالت ثابت و متمایز می‌گیرد)
+RANDOM_WAVE_PALETTES = [
+    ((55, 235, 240), (140, 145, 250), (185, 110, 245)),   # فیروزه‌ای + آبی یاسی + بنفش (مشابه نمونه)
+    ((255, 196, 120), (225, 130, 165), (175, 135, 245)),  # کهربایی گرم + صورتی ملایم + یاسی
+    ((245, 145, 185), (170, 165, 250), (125, 215, 250)),  # صورتی ملایم + یاسی + آبی یخی
+    ((95, 235, 185), (135, 210, 245), (195, 155, 250)),   # نعنایی نرم + آبی ملایم + یاسی کم‌اشباع
 ]
 
 
@@ -110,7 +111,7 @@ def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Im
             avatar = Image.new("RGBA", (size, size), (0, 0, 0, 0))
             avatar.paste(cropped, (0, 0), mask)
             ImageDraw.Draw(avatar).ellipse(
-                (0, 0, size - 1, size - 1), outline=(255, 255, 255, 180), width=1
+                (0, 0, size - 1, size - 1), outline=(255, 255, 255, 195), width=1
             )
             return apply_opacity(avatar, CHANNEL_AVATAR_OPACITY)
         except Exception as e:
@@ -118,14 +119,33 @@ def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Im
 
     avatar = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(avatar)
-    draw.ellipse((1, 1, size - 2, size - 2), fill=(30, 30, 36, 230), outline=(255, 255, 255, 180), width=1)
+    draw.ellipse((1, 1, size - 2, size - 2), fill=(25, 25, 35, 235), outline=(255, 255, 255, 195), width=1)
     badge_font = font_badge or load_wm_font(max(11, size // 2))
     label = "R"
     bbox = draw.textbbox((0, 0), label, font=badge_font)
     lw = bbox[2] - bbox[0]
     lh = bbox[3] - bbox[1]
-    draw.text(((size - lw) // 2, (size - lh) // 2 - 1), label, font=badge_font, fill=(255, 255, 255, 235))
+    draw.text(((size - lw) // 2, (size - lh) // 2 - 1), label, font=badge_font, fill=(255, 255, 255, 240))
     return apply_opacity(avatar, CHANNEL_AVATAR_OPACITY)
+
+
+def build_bottom_shadow_overlay(width: int = WIDTH, height: int = HEIGHT) -> Image.Image:
+    """
+    هاله سایه تیره و نرم در یک‌سوم پایین صفحه می‌سازد
+    تا اکولایزر و واترمارک روی هر کلیپی خوانا و یک‌دست بمانند.
+    """
+    shadow_h = height // 3
+    start_y = height - shadow_h
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    max_alpha = 175
+    for y in range(start_y, height):
+        t = (y - start_y) / max(1, shadow_h - 1)
+        alpha = int(max_alpha * (t ** 1.55))
+        draw.line([(0, y), (width - 1, y)], fill=(8, 8, 12, alpha))
+
+    return overlay
 
 
 def parse_time_to_seconds(t_str: str) -> float:
@@ -258,30 +278,27 @@ def extract_rhythm_and_vocal_envelopes(
     audio_path: str, start_sec: float, duration: float, fps: int
 ) -> tuple[list[float], list[float]]:
     """
-    تشخیص مجزا و دقیق‌ترِ ریتم (ضرب/باس) و وکال (صدای خواننده/کلمات تاکیدی)
-    با نرخ نمونه‌برداری ۸۰۰۰ هرتز تا فیلترهای فرکانسی با دقت بیشتری عمل کنند.
+    تشخیص مجزا و دقیق‌ترِ ریتم (ضرب/باس) و وکال (صدای خواننده/کلمات تاکیدی).
     """
     total_frames = max(1, int(duration * fps))
 
-    # تشخیص ریتم: فیلتر پایین‌گذر برای ضرب‌ها و باس‌های کوبشی
     rhythm_raw = _extract_pcm_envelope(
         audio_path,
         start_sec,
         duration,
         total_frames,
         af_filter="lowpass=f=240:p=1,highpass=f=45:p=1",
-        gain=5.2,
+        gain=5.4,
         sample_rate=8000,
     )
 
-    # تشخیص وکال: فیلتر میان‌گذر در محدوده صدای خواننده و هارمونیک‌های وکال
     vocal_raw = _extract_pcm_envelope(
         audio_path,
         start_sec,
         duration,
         total_frames,
         af_filter="bandpass=f=1450:w=1600:t=h",
-        gain=6.2,
+        gain=6.4,
         sample_rate=8000,
     )
 
@@ -293,23 +310,21 @@ def extract_rhythm_and_vocal_envelopes(
 
     prev_r_raw = rhythm_raw[0] if rhythm_raw else 0.2
     prev_v_raw = vocal_raw[0] if vocal_raw else 0.2
-    prev_r_out = 0.18
-    prev_v_out = 0.18
+    prev_r_out = 0.20
+    prev_v_out = 0.20
 
     for r_cur, v_cur in zip(rhythm_raw, vocal_raw):
-        # ضرب‌های ناگهانی ریتم را تیزتر تشخیص می‌دهد
-        r_hit = max(0.0, r_cur - prev_r_raw) * 2.1
+        r_hit = max(0.0, r_cur - prev_r_raw) * 2.2
         if r_cur > rhythm_avg * 1.18:
-            r_hit += (r_cur - rhythm_avg * 1.18) * 0.8
-        r_target = min(1.0, r_cur * 0.85 + r_hit)
-        r_out = max(0.05, r_target * 0.84 + prev_r_out * 0.16)
+            r_hit += (r_cur - rhythm_avg * 1.18) * 0.85
+        r_target = min(1.0, r_cur * 0.88 + r_hit)
+        r_out = max(0.06, r_target * 0.85 + prev_r_out * 0.15)
 
-        # تاکید وکال را نرم‌تر و دقیق‌تر روی کلمات و اوج صدا نشان می‌دهد
-        v_accent = max(0.0, v_cur - prev_v_raw) * 1.65
+        v_accent = max(0.0, v_cur - prev_v_raw) * 1.75
         if v_cur > vocal_avg * 1.15:
-            v_accent += (v_cur - vocal_avg * 1.15) * 0.75
-        v_target = min(1.0, v_cur * 0.88 + v_accent)
-        v_out = max(0.05, v_target * 0.80 + prev_v_out * 0.20)
+            v_accent += (v_cur - vocal_avg * 1.15) * 0.80
+        v_target = min(1.0, v_cur * 0.90 + v_accent)
+        v_out = max(0.06, v_target * 0.82 + prev_v_out * 0.18)
 
         rhythm_env.append(r_out)
         vocal_env.append(v_out)
@@ -320,71 +335,121 @@ def extract_rhythm_and_vocal_envelopes(
     return rhythm_env, vocal_env
 
 
-def draw_compact_dual_equalizer(
+def _lerp_triple_color(
+    c1: tuple[int, int, int],
+    c2: tuple[int, int, int],
+    c3: tuple[int, int, int],
+    t: float,
+) -> tuple[int, int, int]:
+    """گرادیان سه‌رنگِ نرم از چپ به راست را حساب می‌کند."""
+    t = max(0.0, min(1.0, t))
+    if t < 0.5:
+        k = t * 2.0
+        a, b = c1, c2
+    else:
+        k = (t - 0.5) * 2.0
+        a, b = c2, c3
+    return (
+        int(a[0] + (b[0] - a[0]) * k),
+        int(a[1] + (b[1] - a[1]) * k),
+        int(a[2] + (b[2] - a[2]) * k),
+    )
+
+
+def draw_filled_ribbed_wave_equalizer(
     frame: Image.Image,
     f_idx: int,
     rhythm_amp: float,
     vocal_amp: float,
-    eq_rgba: tuple[int, int, int, int],
-    style: str = EQ_STYLE,
+    palette: tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]],
 ) -> int:
     """
-    اکولایزر کوچک و جمع‌وجور مخصوص روی کلیپ:
-    بخش میانی حساس‌تر به وکال و بخش‌های کناری/ضرب‌پذیر حساس‌تر به ریتم.
+    دقیقاً سبک اکولایزرِ تصویر انتخاب‌شده:
+    منحنیِ نرمِ قله‌ای در بالا که سطح زیر آن با میله‌های عمودیِ ظریف و نزدیک‌به‌هم پر شده،
+    با خط پایه ظریف و درخشش ملایم در پایین کلیپ.
     """
-    draw = ImageDraw.Draw(frame)
-    r, g, b, alpha = eq_rgba
-    main_color = (r, g, b, alpha)
-    dim_color = (r, g, b, max(65, alpha // 2))
+    c1, c2, c3 = palette
 
-    # ابعاد کوچک و متعادل تا روی کلیپ مزاحم نباشد
-    line_count = 32
-    line_w = 3
-    gap = 5
-    total_w = line_count * line_w + (line_count - 1) * gap
-    start_x = (WIDTH - total_w) // 2
-    base_y = HEIGHT - 135
-    max_h = 46
+    wave_w = 310
+    wave_h = 68
+    start_x = (WIDTH - wave_w) // 2
+    base_y = HEIGHT - 148
 
-    draw.line(
-        [(start_x, base_y + 2), (start_x + total_w, base_y + 2)],
-        fill=dim_color,
-        width=2,
-    )
+    overlay = Image.new("RGBA", (wave_w, wave_h), (0, 0, 0, 0))
+    glow_layer = Image.new("RGBA", (wave_w, wave_h), (0, 0, 0, 0))
+    draw_main = ImageDraw.Draw(overlay)
+    draw_glow = ImageDraw.Draw(glow_layer)
 
-    right_to_left_phase = f_idx * 0.20
+    bottom_line_y = wave_h - 10
+    phase = f_idx * 0.16
 
-    for i in range(line_count):
-        norm_pos = (i / max(1, line_count - 1)) * 2.0 - 1.0  # -1 تا +1
-        dist_center = abs(norm_pos)
+    # رسم خطوط عمودیِ ظریفِ پرکننده زیر منحنی (ribbed spectrum fill)
+    bar_step = 4
+    bar_w = 2
+    top_pts = []
 
-        # وزن وکال در مرکز بیشتر و وزن ریتم در اطراف بیشتر است
-        vocal_weight = max(0.25, 1.0 - 0.75 * dist_center)
-        rhythm_weight = max(0.35, 0.45 + 0.55 * dist_center)
-        blended_amp = vocal_amp * vocal_weight * 0.58 + rhythm_amp * rhythm_weight * 0.52
-        blended_amp = min(1.0, blended_amp)
+    for x in range(0, wave_w, bar_step):
+        u = x / max(1, wave_w - 1)  # 0.0 تا 1.0
 
-        shape_weight = max(0.35, 1.0 - 0.45 * dist_center)
-        travel_wave = abs(math.sin(right_to_left_phase - i * 0.30)) ** 1.2
-        h = max(4, int(max_h * blended_amp * shape_weight * travel_wave))
+        # دو سر منحنی به صفر می‌رسند تا گوشه‌ها نرم و تیز شوند
+        edge_envelope = math.sin(u * math.pi) ** 1.65
 
-        x = start_x + i * (line_w + gap)
-        if style == "dual_linear":
-            mid_y = base_y - 20
-            half_h = max(3, h // 2)
-            draw.line([(x, mid_y - half_h), (x, mid_y + half_h)], fill=main_color, width=line_w)
-        else:
-            seg_h = 5
-            seg_gap = 2
-            cur_y = base_y
-            drawn = 0
-            while drawn < h and cur_y > base_y - max_h:
-                step = min(seg_h, h - drawn)
-                draw.line([(x, cur_y), (x, cur_y - step)], fill=main_color, width=line_w)
-                cur_y -= step + seg_gap
-                drawn += step + seg_gap
+        # قله اصلی در سمت چپ-مرکز (واکنش قوی به ریتم و ضرب) و قله ملایم‌تر در راست (واکنش به وکال)
+        left_peak_shape = math.exp(-((u - 0.30) ** 2) / 0.018)
+        right_peak_shape = math.exp(-((u - 0.68) ** 2) / 0.028)
 
-    return base_y + 4
+        rhythm_pulse = 0.65 + 0.35 * math.sin(phase - u * 4.5)
+        vocal_pulse = 0.65 + 0.35 * math.cos(phase * 0.8 + u * 5.0)
+
+        h_left = left_peak_shape * (0.28 + rhythm_amp * 0.95 * rhythm_pulse)
+        h_right = right_peak_shape * (0.20 + vocal_amp * 0.72 * vocal_pulse)
+        base_ripple = 0.07 * (0.5 + 0.5 * math.sin(u * 11.0 - phase))
+
+        combined = min(1.0, (h_left + h_right + base_ripple) * edge_envelope)
+        bar_h = max(1, int(combined * (wave_h - 16)))
+        y_top = bottom_line_y - bar_h
+        top_pts.append((x, y_top))
+
+        col = _lerp_triple_color(c1, c2, c3, u)
+        # میله عمودیِ نیمه‌شفاف زیر منحنی
+        draw_main.line(
+            [(x, bottom_line_y), (x, y_top)],
+            fill=(col[0], col[1], col[2], 145),
+            width=bar_w,
+        )
+
+    # رسم خطِ منحنیِ درخشانِ لبه بالایی موج
+    if len(top_pts) >= 2:
+        for idx in range(len(top_pts) - 1):
+            seg_u = idx / max(1, len(top_pts) - 2)
+            col = _lerp_triple_color(c1, c2, c3, seg_u)
+            draw_main.line(
+                [top_pts[idx], top_pts[idx + 1]],
+                fill=(col[0], col[1], col[2], 245),
+                width=2,
+            )
+            draw_glow.line(
+                [top_pts[idx], top_pts[idx + 1]],
+                fill=(col[0], col[1], col[2], 150),
+                width=5,
+            )
+
+    # خط افقیِ ظریفِ پایه زیر اکولایزر
+    for x in range(0, wave_w - 4, 4):
+        seg_u = x / max(1, wave_w - 1)
+        col = _lerp_triple_color(c1, c2, c3, seg_u)
+        edge_a = int(130 * math.sin(seg_u * math.pi))
+        draw_main.line(
+            [(x, bottom_line_y + 1), (x + 4, bottom_line_y + 1)],
+            fill=(col[0], col[1], col[2], edge_a),
+            width=1,
+        )
+
+    glow_blurred = glow_layer.filter(ImageFilter.GaussianBlur(radius=4))
+    frame.paste(glow_blurred, (start_x, base_y), glow_blurred)
+    frame.paste(overlay, (start_x, base_y), overlay)
+
+    return base_y + bottom_line_y + 3
 
 
 def make_fixed_bottom_watermark(
@@ -392,7 +457,7 @@ def make_fixed_bottom_watermark(
     ig_logo: Image.Image,
     channel_avatar: Image.Image,
     font_wm,
-    icon_size: int = 16,
+    icon_size: int = 15,
 ) -> Image.Image:
     """
     عکس کانال را به‌صورت مجزا و جمع‌وجور کنار بخش واترمارک (آیکون‌های TG/IG + متن‌ها)
@@ -467,8 +532,8 @@ def build_synced_reel(
 ) -> tuple[bool, str]:
     """
     کلیپ پس‌زمینه را هم‌اندازه تایم موزیک کات می‌زند، صدای اصلی کلیپ را قطع می‌کند،
-    اکولایزر کوچک و حساس به ریتم و وکال را در پایین قرار می‌دهد و عکس کانال + واترمارک را
-    در وسط و زیر اکولایزر با فاصله کم و کیفیت بالا ذخیره می‌کند.
+    سایه نرم یک‌سوم پایین را اعمال می‌کند، اکولایزر طیفیِ قله‌ای را با یک پالت رندومِ ثابت
+    برای همان کلیپ در پایین قرار می‌دهد و آواتار کانال + واترمارک را زیر آن و وسط‌چین ذخیره می‌کند.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -481,17 +546,21 @@ def build_synced_reel(
         return False, "زمان پایان باید بزرگ‌تر از زمان شروع باشد."
 
     duration = min(end_sec - start_sec, float(MAX_DURATION))
-    _log(f"شروع ساخت ریلز {duration:.1f} ثانیه‌ای با اکولایزر کوچکِ ریتم و وکال")
+
+    # انتخاب تصادفی یک پالت رنگی برای کل این کلیپ تا نسبت به ریلزهای دیگر متمایز باشد
+    selected_palette = random.choice(RANDOM_WAVE_PALETTES)
+    _log(f"شروع ساخت ریلز {duration:.1f} ثانیه‌ای با پالت رندوم: {selected_palette}")
 
     rhythm_env, vocal_env = extract_rhythm_and_vocal_envelopes(audio_path, start_sec, duration, FPS)
+    bottom_shadow = build_bottom_shadow_overlay(WIDTH, HEIGHT)
 
     ensure_default_logos()
-    icon_px = 16
+    icon_px = 15
     font_wm = load_wm_font(14)
 
     tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((icon_px, icon_px)), WM_ICON_OPACITY)
     ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((icon_px, icon_px)), WM_ICON_OPACITY)
-    channel_avatar = build_channel_avatar(size=CHANNEL_AVATAR_SIZE, font_badge=load_wm_font(15))
+    channel_avatar = build_channel_avatar(size=CHANNEL_AVATAR_SIZE, font_badge=load_wm_font(14))
 
     wm_block = make_fixed_bottom_watermark(
         tg_logo=tg_logo,
@@ -503,9 +572,9 @@ def build_synced_reel(
     wm_w, wm_h = wm_block.size
 
     fixed_wm_x = (WIDTH - wm_w) // 2
-    eq_bottom_y = HEIGHT - 131
-    gap_below_eq = 8
-    fixed_wm_y = min(HEIGHT - wm_h - 10, eq_bottom_y + gap_below_eq)
+    wave_bottom_y = HEIGHT - 87
+    gap_below_wave = 10
+    fixed_wm_y = min(HEIGHT - wm_h - 10, wave_bottom_y + gap_below_wave)
 
     is_video = video_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
     vid_input = ["-stream_loop", "-1", "-i", video_path] if is_video else ["-loop", "1", "-i", video_path]
@@ -596,13 +665,12 @@ def build_synced_reel(
                 break
 
             frame = Image.frombytes("RGB", (WIDTH, HEIGHT), raw_frame).convert("RGBA")
+            frame = Image.alpha_composite(frame, bottom_shadow)
+
             r_amp = rhythm_env[f_idx] if f_idx < len(rhythm_env) else 0.2
             v_amp = vocal_env[f_idx] if f_idx < len(vocal_env) else 0.2
 
-            color_idx = (f_idx // max(1, FPS * 8)) % len(EQ_COLOR_PALETTE)
-            eq_rgba = EQ_COLOR_PALETTE[color_idx]
-
-            draw_compact_dual_equalizer(frame, f_idx, r_amp, v_amp, eq_rgba, style=EQ_STYLE)
+            draw_filled_ribbed_wave_equalizer(frame, f_idx, r_amp, v_amp, selected_palette)
             frame.paste(wm_block, (fixed_wm_x, fixed_wm_y), wm_block)
 
             try:
@@ -671,7 +739,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر کوچکِ ریتم و وکال آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر طیفی قله‌ای، سایه پایین و پالت رندوم آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
