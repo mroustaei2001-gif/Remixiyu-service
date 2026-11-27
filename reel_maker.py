@@ -27,7 +27,6 @@ AUTO_FONT_PATH = os.path.join(FONTS_DIR, "PersianBoldFont.ttf")
 TG_LOGO_PATH = os.path.join(BASE_DIR, "tg_logo.png")
 IG_LOGO_PATH = os.path.join(BASE_DIR, "ig_logo.png")
 
-# فونت‌های غیرمتغیر (Static) با ضخامت Bold برای فارسی و لاتین
 FONT_DOWNLOAD_URLS = [
     "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Bold.ttf",
     "https://github.com/google/fonts/raw/main/ofl/notosansarabic/static/NotoSansArabic-Bold.ttf",
@@ -39,12 +38,22 @@ WIDTH = 720
 HEIGHT = 1280
 FPS = 20
 WM_ALPHA = 102  # حدود ۴۰ درصد شفافیت (0.4 * 255)
+EQ_STYLE = "segmented_linear"  # گزینه‌ها: "segmented_linear" یا "dual_linear"
 
-COLOR_PALETTE = [
+# پالت رنگ متن وسط
+TEXT_COLOR_PALETTE = [
     (255, 255, 255, 252),  # سفید خالص
     (255, 214, 10, 252),   # زرد طلایی
     (120, 220, 255, 252),  # آبی روشن
     (255, 130, 185, 252),  # صورتی ملایم
+]
+
+# پالت رنگ جدید اکولایزر خطی
+EQ_COLOR_PALETTE = [
+    (0, 245, 212, 235),    # فیروزه‌ای نئونی
+    (185, 110, 255, 235),  # بنفش یاسی پرانرژی
+    (255, 159, 28, 235),   # نارنجی کهربایی
+    (72, 229, 132, 235),   # سبز نعنایی
 ]
 
 _FA_RESHAPER = None
@@ -290,13 +299,16 @@ def test_voicemaker_transcription(audio_path: str, timeout: int = 15) -> tuple[b
         return False, f"خطا در ارتباط شبکه با سایت: {str(e)[:200]}"
 
 
-def extract_beat_envelope(
-    audio_path: str, start_sec: float, duration: float, fps: int
+def _extract_pcm_envelope(
+    audio_path: str,
+    start_sec: float,
+    duration: float,
+    total_frames: int,
+    af_filter: str | None = None,
+    gain: float = 5.0,
 ) -> list[float]:
-    """انرژی هر فریم از موزیک را با واکنش سریع‌تر استخراج می‌کند تا اکولایزر تیزتر حرکت کند."""
-    total_frames = max(1, int(duration * fps))
+    """انرژی هر فریم از سیگنال صوتی (اختیاری با فیلتر فرکانسی وکال) را استخراج می‌کند."""
     sample_rate = 4000
-
     with tempfile.NamedTemporaryFile(suffix=".pcm", delete=False) as tf:
         pcm_path = tf.name
 
@@ -311,48 +323,86 @@ def extract_beat_envelope(
         str(duration),
         "-i",
         audio_path,
-        "-f",
-        "s16le",
-        "-ac",
-        "1",
-        "-ar",
-        str(sample_rate),
-        pcm_path,
     ]
+    if af_filter:
+        cmd.extend(["-af", af_filter])
+    cmd.extend(
+        [
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate),
+            pcm_path,
+        ]
+    )
+
     try:
         subprocess.run(
             cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45
         )
         with open(pcm_path, "rb") as f:
             raw = f.read()
-    except Exception as e:
-        _log(f"خطای استخراج ریتم صدا: {e}")
-        return [0.35] * total_frames
+    except Exception:
+        return [0.3] * total_frames
     finally:
         if os.path.exists(pcm_path):
             os.remove(pcm_path)
 
     if not raw:
-        return [0.35] * total_frames
+        return [0.3] * total_frames
 
     count = len(raw) // 2
     samples = struct.unpack(f"<{count}h", raw[: count * 2])
     samples_per_frame = max(1, count // total_frames)
 
-    energies: list[float] = []
-    prev_val = 0.2
+    out: list[float] = []
     for i in range(total_frames):
         chunk = samples[i * samples_per_frame : (i + 1) * samples_per_frame]
         if not chunk:
-            energies.append(prev_val * 0.7)
+            out.append(0.08)
             continue
         rms = math.sqrt(sum(s * s for s in chunk) / len(chunk)) / 32768.0
-        sharp_val = min(1.0, (rms * 5.2) ** 0.85)
-        val = max(0.06, sharp_val * 0.8 + prev_val * 0.2)
-        prev_val = val
-        energies.append(val)
+        val = min(1.0, (rms * gain) ** 0.8)
+        out.append(max(0.06, val))
+    return out
 
-    return energies
+
+def extract_vocal_and_rhythm_envelope(
+    audio_path: str, start_sec: float, duration: float, fps: int
+) -> list[float]:
+    """
+    انرژی را با تمرکز بالا روی وکال (حدود ۳۰۰ تا ۳۲۰۰ هرتز) و کمی ریتم کلی آهنگ استخراج می‌کند.
+    """
+    total_frames = max(1, int(duration * fps))
+    # تمرکز روی محدوده فرکانسی وکال انسان با bandpass در 1500Hz و پهنای 1800Hz
+    vocal_env = _extract_pcm_envelope(
+        audio_path,
+        start_sec,
+        duration,
+        total_frames,
+        af_filter="bandpass=f=1500:w=1800:t=h",
+        gain=6.2,
+    )
+    rhythm_env = _extract_pcm_envelope(
+        audio_path,
+        start_sec,
+        duration,
+        total_frames,
+        af_filter=None,
+        gain=4.4,
+    )
+
+    combined: list[float] = []
+    prev_v = 0.2
+    for v, r in zip(vocal_env, rhythm_env):
+        # ۷۸٪ حساسیت به وکال و ۲۲٪ به ریتم
+        target = min(1.0, v * 0.78 + r * 0.22)
+        cur = max(0.06, target * 0.82 + prev_v * 0.18)
+        prev_v = cur
+        combined.append(cur)
+    return combined
 
 
 def _clean_phrase_text(raw: str) -> str:
@@ -419,37 +469,69 @@ def build_rhythmic_cues(
     return cues
 
 
-def draw_equalizer_on_background(
-    frame: Image.Image, f_idx: int, amp: float, accent_rgba: tuple[int, int, int, int]
-):
-    """اکولایزر تیز و پویاتر را مستقیماً روی بک‌گراند ریلز (در پایینِ وسط، بالای واترماک) رسم می‌کند."""
+def draw_linear_equalizer(
+    frame: Image.Image,
+    f_idx: int,
+    amp: float,
+    eq_rgba: tuple[int, int, int, int],
+    style: str = EQ_STYLE,
+) -> int:
+    """
+    اکولایزر خطی را روی بک‌گراند ریلز رسم می‌کند و مختصات خط پایه/پایین اکولایزر را برمی‌گرداند
+    تا واترماک دقیقاً زیر آن با فاصله کم قرار بگیرد.
+    """
     draw = ImageDraw.Draw(frame)
-    bar_count = 36
-    bar_w = 7
-    gap = 5
-    total_w = bar_count * bar_w + (bar_count - 1) * gap
+    r, g, b, alpha = eq_rgba
+    main_color = (r, g, b, alpha)
+    dim_color = (r, g, b, max(70, alpha // 2))
+
+    line_count = 44
+    line_w = 4
+    gap = 6
+    total_w = line_count * line_w + (line_count - 1) * gap
     start_x = (WIDTH - total_w) // 2
-    base_y = HEIGHT - 152
-    max_bar_h = 84
+    base_y = HEIGHT - 150
+    max_h = 78
 
-    r, g, b, _ = accent_rgba
-    bar_color = (r, g, b, 225)
+    # خط افقی راهنمای ظریف در پایه اکولایزر
+    draw.line(
+        [(start_x, base_y + 2), (start_x + total_w, base_y + 2)],
+        fill=dim_color,
+        width=2,
+    )
 
-    for i in range(bar_count):
-        center_dist = abs(i - (bar_count - 1) / 2.0) / ((bar_count - 1) / 2.0)
-        envelope = max(0.28, 1.0 - 0.65 * (center_dist ** 1.3))
-        sharp_wave = abs(math.sin(f_idx * 0.65 + i * 1.15)) ** 1.35
-        h = max(6, int(max_bar_h * amp * envelope * (0.25 + 0.75 * sharp_wave)))
+    for i in range(line_count):
+        norm_pos = (i / max(1, line_count - 1)) * 2.0 - 1.0  # -1 تا +1
+        center_weight = max(0.3, 1.0 - 0.55 * abs(norm_pos))
 
-        x0 = start_x + i * (bar_w + gap)
-        y0 = base_y - h
-        x1 = x0 + bar_w
-        y1 = base_y
-        draw.rounded_rectangle((x0, y0, x1, y1), radius=2, fill=bar_color)
+        # حرکت خطیِ حساس به وکال + کمی موج ریتمیک
+        vocal_wave = abs(math.sin(f_idx * 0.72 + i * 0.85)) ** 1.25
+        rhythm_tick = 0.75 + 0.25 * math.cos(f_idx * 0.35 + i * 0.4)
+        h = max(5, int(max_h * amp * center_weight * vocal_wave * rhythm_tick))
+
+        x = start_x + i * (line_w + gap)
+        if style == "dual_linear":
+            # سبک خطی دوطرفه عمودی حول محور میانی
+            mid_y = base_y - 34
+            half_h = max(4, h // 2)
+            draw.line([(x, mid_y - half_h), (x, mid_y + half_h)], fill=main_color, width=line_w)
+        else:
+            # سبک خطی بخش‌بخش (Segmented Linear) با شکاف‌های ریز خطی
+            seg_h = 7
+            seg_gap = 3
+            cur_y = base_y
+            drawn = 0
+            while drawn < h and cur_y > base_y - max_h:
+                step = min(seg_h, h - drawn)
+                draw.line([(x, cur_y), (x, cur_y - step)], fill=main_color, width=line_w)
+                cur_y -= step + seg_gap
+                drawn += step + seg_gap
+
+    return base_y + 4
 
 
 def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font_wm) -> Image.Image:
-    """واترمارک کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله برای قرارگیری ثابت در پایین صفحه."""
+    """واترمارک کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله."""
     block_w = 240
     block_h = 44
     block = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
@@ -534,8 +616,8 @@ def build_synced_reel(
 ) -> tuple[bool, str]:
     """
     بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
-    صدای اصلی ویدئو را قطع می‌کند، اکولایزر تیزتر و متن بولد فارسی هماهنگ با خواننده را روی بک‌گراند می‌گذارد
-    و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را در پایین صفحه قرار می‌دهد.
+    صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی حساس به وکال/ریتم و متن بولد فارسی را روی بک‌گراند می‌گذارد
+    و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را در وسط و زیر اکولایزر با فاصله کم قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -550,7 +632,7 @@ def build_synced_reel(
     duration = min(end_sec - start_sec, float(MAX_DURATION))
     _log(f"شروع ساخت ریلز به مدت {duration:.1f} ثانیه")
 
-    energies = extract_beat_envelope(audio_path, start_sec, duration, FPS)
+    energies = extract_vocal_and_rhythm_envelope(audio_path, start_sec, duration, FPS)
     cues = build_rhythmic_cues(lyrics_text, duration, FPS, energies)
     _log(f"تعداد عبارات زمان‌بندی‌شده: {len(cues)}")
 
@@ -565,8 +647,11 @@ def build_synced_reel(
     wm_block = make_fixed_bottom_watermark(tg_logo, ig_logo, font_wm)
     wm_w, wm_h = wm_block.size
 
+    # واترماک در وسط افقی و زیر اکولایزر با فاصله چند میلی‌متری (حدود ۱۲ پیکسل)
     fixed_wm_x = (WIDTH - wm_w) // 2
-    fixed_wm_y = HEIGHT - wm_h - 48
+    eq_bottom_y = HEIGHT - 146
+    gap_below_eq = 12
+    fixed_wm_y = min(HEIGHT - wm_h - 10, eq_bottom_y + gap_below_eq)
 
     is_video = video_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
     vid_input = ["-stream_loop", "-1", "-i", video_path] if is_video else ["-loop", "1", "-i", video_path]
@@ -667,9 +752,10 @@ def build_synced_reel(
                     cue_index = idx
                     break
 
-            accent_rgba = COLOR_PALETTE[cue_index % len(COLOR_PALETTE)]
+            text_rgba = TEXT_COLOR_PALETTE[cue_index % len(TEXT_COLOR_PALETTE)]
+            eq_rgba = EQ_COLOR_PALETTE[(cue_index + 1) % len(EQ_COLOR_PALETTE)]
 
-            draw_equalizer_on_background(frame, f_idx, amp, accent_rgba)
+            draw_linear_equalizer(frame, f_idx, amp, eq_rgba, style=EQ_STYLE)
 
             if active_text:
                 draw_centered_bold_text(
@@ -677,7 +763,7 @@ def build_synced_reel(
                     text=active_text,
                     font_bold=font_center,
                     emoji_font=emoji_font,
-                    color_rgba=accent_rgba,
+                    color_rgba=text_rgba,
                 )
 
             frame.paste(wm_block, (fixed_wm_x, fixed_wm_y), wm_block)
@@ -748,7 +834,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با فونت بولد فارسی، اکولایزر تیزتر و واترماک ثابت پایین آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر خطی حساس به وکال و واترماک زیر آن آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
