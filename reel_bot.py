@@ -8,9 +8,10 @@ from reel_maker import (
     test_voicemaker_transcription,
 )
 
-API_ID = int(os.environ.get("TG_API_ID", "0"))
-API_HASH = os.environ.get("TG_API_HASH", "")
-BOT_TOKEN = os.environ.get("REEL_BOT_TOKEN", "")
+raw_api_id = os.environ.get("TG_API_ID") or os.environ.get("API_ID") or "0"
+API_ID = int(str(raw_api_id).strip() or "0")
+API_HASH = (os.environ.get("TG_API_HASH") or os.environ.get("API_HASH") or "").strip()
+BOT_TOKEN = (os.environ.get("REEL_BOT_TOKEN") or os.environ.get("BOT_TOKEN") or "").strip()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_PATH = os.path.join(BASE_DIR, "reel_bot_session")
