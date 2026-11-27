@@ -1,7 +1,12 @@
+import asyncio
 import os
 import tempfile
 from telethon import TelegramClient, events
-from reel_maker import build_synced_reel, cut_audio_segment
+from reel_maker import (
+    build_synced_reel,
+    cut_audio_segment,
+    test_voicemaker_transcription,
+)
 
 API_ID = int(os.environ.get("TG_API_ID", "0"))
 API_HASH = os.environ.get("TG_API_HASH", "")
@@ -38,7 +43,7 @@ def _is_video_or_photo(msg) -> bool:
 async def handle_start(event):
     await event.reply(
         "ربات آماده است:\n\n"
-        "1️⃣ **برش موزیک (تا ۶۰ ثانیه) برای تبدیل به متن:**\n"
+        "1️⃣ **برش موزیک (تا ۶۰ ثانیه) و تست خودکار تبدیل متن:**\n"
         "روی فایل موزیک ریپلای کنید و بنویسید:\n"
         "`.cut 00:20 01:05`\n\n"
         "2️⃣ **ثبت ویدئوی خام بدون واترماک:**\n"
@@ -62,7 +67,11 @@ async def handle_setbg(event):
         os.remove(BG_VIDEO_PATH)
 
     downloaded = await reply.download_media(file=BG_VIDEO_PATH)
-    if downloaded and os.path.exists(downloaded) and os.path.abspath(downloaded) != os.path.abspath(BG_VIDEO_PATH):
+    if (
+        downloaded
+        and os.path.exists(downloaded)
+        and os.path.abspath(downloaded) != os.path.abspath(BG_VIDEO_PATH)
+    ):
         os.replace(downloaded, BG_VIDEO_PATH)
 
     if not os.path.exists(BG_VIDEO_PATH) or os.path.getsize(BG_VIDEO_PATH) == 0:
@@ -85,7 +94,7 @@ async def handle_cut(event):
         return
 
     start_str, end_str = args[0], args[1]
-    status = await event.reply("✂️ در حال برش موزیک...")
+    status = await event.reply("✂️ در حال برش موزیک و تست تبدیل متن در سایت...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         src_audio = os.path.join(tmpdir, "source_audio")
@@ -101,10 +110,23 @@ async def handle_cut(event):
             await status.edit(f"❌ {msg}")
             return
 
-        await event.respond(
-            file=out_audio,
-            message=f"🎵 برش {dur:.0f} ثانیه‌ای آماده است؛ می‌توانید برای تبدیل به متن استفاده کنید.",
-        )
+        site_ok, site_msg = test_voicemaker_transcription(out_audio)
+        if site_ok:
+            caption = (
+                f"🎵 برش {dur:.0f} ثانیه‌ای آماده شد.\n"
+                f"✅ متن دریافت‌شده از سایت:\n{site_msg}\n\n"
+                f"پس از تایید، با `.reel {start_str} {end_str} | متن_تاییدشده` ریلز را بسازید."
+            )
+        else:
+            caption = (
+                f"🎵 برش {dur:.0f} ثانیه‌ای آماده شد.\n"
+                f"⚠️ تست خودکار سایت نتیجه نداد: {site_msg}\n"
+                f"لطفاً فایل را دستی در سایت تبدیل کنید و بعد با:\n"
+                f"`.reel {start_str} {end_str} | متن_تاییدشده`\n"
+                f"ریلز را بسازید."
+            )
+
+        await event.respond(file=out_audio, message=caption)
         await status.delete()
 
 
@@ -171,5 +193,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
