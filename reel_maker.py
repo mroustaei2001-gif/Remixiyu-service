@@ -4,6 +4,7 @@ import re
 import struct
 import subprocess
 import tempfile
+import requests
 from PIL import Image, ImageDraw, ImageFont
 
 TG_TEXT = "t.me/remixiyu"
@@ -141,6 +142,64 @@ def cut_audio_segment(
         return False, 0.0, f"خطا در برش موزیک:\n{err_txt[-800:]}"
 
 
+def test_voicemaker_transcription(audio_path: str, timeout: int = 15) -> tuple[bool, str]:
+    """
+    تلاش می‌کند اتصال و ارسال فایل صوتی به voicemaker.in را تست کند.
+    در صورت برخورد با Cloudflare یا عدم دسترسی مستقیم API، دلیل را گزارش می‌دهد.
+    """
+    if not audio_path or not os.path.exists(audio_path):
+        return False, "فایل صوتی برای تست وجود ندارد."
+
+    url = "https://voicemaker.in/speech-to-text/persian/"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+    }
+
+    try:
+        session = requests.Session()
+        resp = session.get(url, headers=headers, timeout=timeout)
+        body_lower = resp.text.lower()
+
+        if (
+            resp.status_code in (403, 429, 503)
+            or "cf-browser-verification" in body_lower
+            or "just a moment..." in body_lower
+            or "enable javascript and cookies" in body_lower
+        ):
+            return (
+                False,
+                f"سایت voicemaker.in با محافظت امنیتی/Cloudflare (کد {resp.status_code}) جلوی درخواست خودکار را گرفت.",
+            )
+
+        with open(audio_path, "rb") as f:
+            files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
+            data = {"language": "persian", "lang": "fa"}
+            post_resp = session.post(url, headers=headers, files=files, data=data, timeout=timeout)
+
+        ctype = post_resp.headers.get("Content-Type", "").lower()
+        if "application/json" in ctype:
+            try:
+                payload = post_resp.json()
+                for key in ("text", "transcript", "result", "data"):
+                    if isinstance(payload, dict) and payload.get(key):
+                        return True, str(payload[key]).strip()
+            except Exception:
+                pass
+
+        return (
+            False,
+            f"سایت پاسخ مستقیم متنی نداد (وضعیت {post_resp.status_code}). تبدیل دستی انجام شود.",
+        )
+
+    except requests.RequestException as e:
+        return False, f"خطا در ارتباط شبکه با سایت: {str(e)[:200]}"
+
+
 def extract_beat_envelope(
     audio_path: str, start_sec: float, duration: float, fps: int
 ) -> list[float]:
@@ -208,7 +267,6 @@ def build_rhythmic_cues(
     if not clean:
         return []
 
-    # اگر خط‌به‌خط باشد یا با | جدا شده باشد هر بخش را به عنوان یک عبارت/کلمه ریتمیک در نظر می‌گیریم
     chunks = [part.strip() for part in re.split(r"\n+|\s*\|\s*", clean) if part.strip()]
     tokens: list[str] = []
     for ch in chunks:
@@ -222,7 +280,6 @@ def build_rhythmic_cues(
         return []
 
     total_frames = max(1, int(duration * fps))
-    # وزن هر بخش ترکیبی از طول کلمه و میانگین انرژی ضرباهنگ در طول بازه
     base_weights = [max(1.0, len(re.sub(r"\s+", "", t)) * 0.6) for t in tokens]
     total_w = sum(base_weights)
 
@@ -236,7 +293,6 @@ def build_rhythmic_cues(
         else:
             end_f = min(total_frames - 1, max(start_f, start_f + span - 1))
 
-        # تنظیم ریز بر اساس اوج ریتم در اطراف نقطه شروع
         peak_window = energies[max(0, start_f - 2) : min(total_frames, start_f + 3)]
         if peak_window and max(peak_window) > 0.65 and start_f > 0:
             start_f = max(0, start_f - 1)
@@ -282,7 +338,6 @@ def draw_centered_bold_text(
     tw = max(1, bbox[2] - bbox[0])
     th = max(1, bbox[3] - bbox[1])
 
-    # ساخت یک بوم کوچک برای متن تا بدون بهم ریختن چیدمان، پالس ریتمیک ملایم بگیرد
     pad_x = 24
     pad_y = 16
     box_w = tw + pad_x * 2
@@ -291,14 +346,12 @@ def draw_centered_bold_text(
     txt_canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
     tdraw = ImageDraw.Draw(txt_canvas)
 
-    # کادر نیمه‌شفاف تیره پشت متن برای خوانایی بالا روی هر پس‌زمینه‌ای
     tdraw.rounded_rectangle(
         (2, 2, box_w - 2, box_h - 2),
         radius=16,
         fill=(0, 0, 0, 135),
     )
 
-    # حاشیه/سایه ضخیم برای حس بولد و برجسته
     tx = pad_x
     ty = pad_y
     for ox, oy in ((-2, 0), (2, 0), (0, -2), (0, 2), (2, 2)):
@@ -306,7 +359,6 @@ def draw_centered_bold_text(
 
     tdraw.text((tx, ty), text, font=font_bold, fill=color_rgba)
 
-    # در صورت موجود بودن فونت ایموجی رنگی روی سرور، تلاش برای رندر ایموجی
     if emoji_font is not None:
         emoji_chars = "".join(ch for ch in text if ord(ch) > 0x1F300)
         if emoji_chars:
@@ -457,7 +509,6 @@ def build_synced_reel(
             frame = Image.frombytes("RGB", (WIDTH, HEIGHT), raw_frame).convert("RGBA")
             amp = energies[f_idx] if f_idx < len(energies) else 0.2
 
-            # یافتن متن فعال در لحظه فعلی بر اساس سینک ریتماتیک
             active_text = ""
             cue_index = 0
             for idx, (s_f, e_f, tok) in enumerate(cues):
