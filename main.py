@@ -55,7 +55,7 @@ SCHEDULE_CONFIG = {
     (1, 30): False    # ۰۱:۳۰ بامداد -> فقط ۲ دمو و ۲ موزیک کامل
 }
 
-# لیست جدید کانال‌های موزیک
+# لیست کانال‌های موزیک
 SOURCE_MUSIC_CHANNELS = [
     'ReMiXeQofli',
     'urap_ufarsi',
@@ -67,18 +67,18 @@ SOURCE_MUSIC_CHANNELS = [
 ]
 FOREIGN_MUSIC_CHANNEL = 'DEEPHOUSEMUZIX'
 
-# لیست جدید کانال‌های عکس‌دار
+# لیست کانال‌های عکس‌دار
 SOURCE_PHOTO_CHANNELS = [
     'ahnGamw',
     'PLAYVIBES'
 ]
 
-# جملات جایگزین مینیمال و خنثی (در صورت نبود کلید AI یا عدم اطمینان)
+# جملات جایگزین کوتاه و تک‌خطی (در صورت نبود کلید AI یا عدم اطمینان)
 FALLBACK_MUSIC_CAPTIONS = [
-    "یه ریمیکس انتخابی و خوش‌ساخت برای پلی‌لیستت 🎶✨",
-    "ترک منتخب این باکس؛ آماده برای پلی کردن 🎧🖤",
-    "یه ریمیکس شنیدنی که تکرارش می‌چسبه 🎵✨",
-    "انتخاب ویژه این ساعت؛ گوش بده و لذت ببر 🎧🔥"
+    "یه ریمیکس انتخابی و خوش‌ساخت 🎶",
+    "ترک منتخب این ساعت 🎧",
+    "یه ریمیکس شنیدنی و قفلی 🎵",
+    "انتخاب ویژه پلی‌لیست امشب ✨"
 ]
 
 COVER_PATH = "cover.png"
@@ -94,6 +94,7 @@ PHOTO_QUEUE = []
 SEEN_TRACKS = set()
 SEEN_PHOTOS = set()
 CACHED_GEMINI_MODEL = None
+RECENT_CAPTIONS = []
 
 if os.path.exists(SEEN_FILE):
     try:
@@ -113,6 +114,8 @@ if os.path.exists(SEEN_PHOTOS_FILE):
 
 
 def save_seen_track(track_key: str):
+    if not track_key:
+        return
     SEEN_TRACKS.add(track_key)
     if TEST_MODE:
         return
@@ -124,6 +127,8 @@ def save_seen_track(track_key: str):
 
 
 def save_seen_photo(photo_key: str):
+    if not photo_key:
+        return
     SEEN_PHOTOS.add(photo_key)
     if TEST_MODE:
         return
@@ -208,8 +213,8 @@ async def get_candidate_gemini_models(session: aiohttp.ClientSession) -> list:
 
 
 async def generate_ai_music_description(audio_file_path: str, track_name: str, artist_name: str) -> str:
-    """ارسال فایل صوتی به Gemini با تست خودکار مدل‌های فعال و تحلیل JSON."""
-    global CACHED_GEMINI_MODEL
+    """ارسال فایل صوتی به Gemini با متن کوتاه تک‌خطی و جلوگیری از تکرار جملات قبلی."""
+    global CACHED_GEMINI_MODEL, RECENT_CAPTIONS
 
     if not GEMINI_API_KEY or not os.path.exists(audio_file_path):
         return random.choice(FALLBACK_MUSIC_CAPTIONS)
@@ -232,25 +237,31 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
         with open(audio_file_path, "rb") as f:
             b64_audio = base64.b64encode(f.read()).decode("ascii")
 
+        avoid_block = ""
+        if RECENT_CAPTIONS:
+            recent_str = "\n".join(f"- {c}" for c in RECENT_CAPTIONS[-10:])
+            avoid_block = (
+                "\nجملات زیر اخیراً استفاده شده‌اند؛ اکیداً این جملات یا ساختار مشابه آن‌ها را تکرار نکن:\n"
+                f"{recent_str}\n"
+            )
+
         prompt = (
             f"این فایل صوتی یک ریمیکس/آهنگ با عنوان «{track_name}»"
             f"{f' و هنرمند «{artist_name}»' if artist_name else ''} است.\n"
-            "ملاک اصلی تو فقط خودِ صدا، لحن خواننده، متن شعر و فضای بیت در فایل صوتی است (نه صرفاً اسم فایل).\n"
+            "ملاک اصلی تو فقط خودِ صدا، لحن خواننده، متن شعر و فضای بیت در فایل صوتی است.\n"
             "خروجی را دقیقاً به صورت یک JSON معتبر با این فیلدها برگردان:\n"
             '{\n'
             '  "mood": "حس اصلی صدا (مثلاً nostalgic, happy, dark, romantic, energetic, chill)",\n'
             '  "confidence": "high یا low",\n'
-            '  "caption": "یک جمله کوتاه، مینیمال، حسی و خودمانی به زبان فارسی با ۱ یا ۲ ایموجی"\n'
+            '  "caption": "یک جمله خیلی کوتاه، مینیمال و حسی به فارسی (حداکثر ۴ تا ۶ کلمه) با فقط ۱ ایموجی در انتها"\n'
             '}\n\n'
             "قوانین بسیار مهم برای caption:\n"
-            "- سبک نقد موسیقی یا گزارش‌گونه ننویس.\n"
-            "- از برچسب‌های کلیشه‌ای مثل «فاز سنگین»، «فاز دور دور» و هشتگ اصلاً استفاده نکن.\n"
-            "- مثال‌های خوب:\n"
-            "  * نوستالژی: یه ریمیکس نوستالژی که می‌برتت تو خاطرات قدیم 📼✨\n"
-            "  * شاد: این ریمیکس برای عوض کردن حال‌و‌هوا و انرژی گرفتن عالیه 💃🔥\n"
-            "  * دپ/شبونه: این موزیک قفلی برای روزای تنهایی 🎧🌙\n"
-            "  * پرانرژی/رپ شبونه: این موزیک برای شب‌های بی‌خوابی حسابی می‌چسبه 🌙🔥\n"
-            "- اگر از حس آهنگ مطمئن نبودی، confidence را low بگذار و یک جمله خنثی و مینیمال بنویس."
+            "- بسیار کوتاه باشد (بین ۳ تا ۶ کلمه و حداکثر ۳۵ کاراکتر) تا در ۱ خط جا بگیرد.\n"
+            "- دقیقاً فقط ۱ ایموجی در انتهای جمله بگذار (نه بیشتر).\n"
+            "- هر بار یک جمله کاملاً جدید و متفاوت بنویس و جملات تکراری ننویس.\n"
+            "- سبک نقد موسیقی، هشتگ و برچسب‌هایی مثل «فاز سنگین» ممنوع است.\n"
+            "- اگر از حس آهنگ مطمئن نبودی، confidence را low بگذار و یک جمله خیلی کوتاه و خنثی بنویس."
+            f"{avoid_block}"
         )
 
         payload = {
@@ -268,7 +279,7 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
                 }
             ],
             "generationConfig": {
-                "temperature": 0.55,
+                "temperature": 0.8,
                 "maxOutputTokens": 200,
                 "responseMimeType": "application/json",
             },
@@ -309,6 +320,9 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
                 if confidence != "low" and caption:
                     first_line = next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
                     if first_line:
+                        RECENT_CAPTIONS.append(first_line)
+                        if len(RECENT_CAPTIONS) > 15:
+                            RECENT_CAPTIONS = RECENT_CAPTIONS[-15:]
                         return first_line
     except Exception as e:
         log(f"AI Music Description Error: {e}")
@@ -348,8 +362,9 @@ async def load_history_from_target():
         log(f"Syncing recent tracks & photos from destination channel {TARGET_CHANNEL}...")
         t_count = 0
         p_count = 0
-        async for msg in user_client.iter_messages(TARGET_CHANNEL, limit=120):
+        async for msg in user_client.iter_messages(TARGET_CHANNEL, limit=300):
             if msg.audio:
+                SEEN_TRACKS.add(f"doc_{msg.audio.id}")
                 for attr in msg.audio.attributes:
                     if isinstance(attr, DocumentAttributeAudio):
                         t = clean_track_name(attr.title or "").lower()
@@ -550,6 +565,7 @@ async def scan_music_cycle():
                     all_channels.append(FOREIGN_MUSIC_CHANNEL)
 
                 collected_candidates = []
+                batch_seen = set()
 
                 for ch in all_channels:
                     try:
@@ -574,18 +590,30 @@ async def scan_music_cycle():
 
                             clean_title = clean_track_name(raw_title).lower()
                             track_key = f"{clean_title}_{duration}"
+                            doc_key = f"doc_{msg.audio.id}"
 
                             is_duplicate = False
-                            if track_key in SEEN_TRACKS or clean_title in SEEN_TRACKS:
+                            if (
+                                doc_key in SEEN_TRACKS
+                                or track_key in SEEN_TRACKS
+                                or clean_title in SEEN_TRACKS
+                                or doc_key in batch_seen
+                                or track_key in batch_seen
+                                or clean_title in batch_seen
+                            ):
                                 is_duplicate = True
                             else:
                                 for seen in list(SEEN_TRACKS):
-                                    if len(seen) > 4 and (seen in clean_title or clean_title in seen):
+                                    if len(seen) > 4 and not seen.startswith("doc_") and (seen in clean_title or clean_title in seen):
                                         is_duplicate = True
                                         break
 
                             if is_duplicate:
                                 continue
+
+                            batch_seen.add(doc_key)
+                            batch_seen.add(track_key)
+                            batch_seen.add(clean_title)
 
                             is_foreign = (ch == FOREIGN_MUSIC_CHANNEL)
                             collected_candidates.append({
@@ -594,6 +622,8 @@ async def scan_music_cycle():
                                 'is_foreign': is_foreign,
                                 'date': msg.date,
                                 'key': track_key,
+                                'clean_title': clean_title,
+                                'doc_key': doc_key,
                                 'title': raw_title,
                                 'performer': raw_performer,
                                 'duration': duration,
@@ -608,6 +638,8 @@ async def scan_music_cycle():
                     if len(MUSIC_QUEUE) >= 10:
                         break
                     save_seen_track(item['key'])
+                    save_seen_track(item['clean_title'])
+                    save_seen_track(item['doc_key'])
                     MUSIC_QUEUE.append(item)
                     log(f"Music Queued (Newest): {item['title']} ({item['duration']}s) from {item['channel']} (Total: {len(MUSIC_QUEUE)})")
 
@@ -703,7 +735,6 @@ async def broadcast_package(include_photo: bool, label: str) -> bool:
                 f'<blockquote><a href="{channel_link}"><b>🎷&nbsp;&nbsp;معرفی بهترین ریمیکسها&nbsp;&nbsp;🎼</b></a></blockquote>\n'
                 f"<blockquote><b>🆔 @{clean_target}</b></blockquote>"
             )
-
 
             prepared_tracks.append({
                 "temp_demo": temp_demo,
