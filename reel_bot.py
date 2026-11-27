@@ -51,13 +51,13 @@ async def handle_start(event):
         "ربات آماده است:\n\n"
         "1️⃣ **برش موزیک (تا ۶۰ ثانیه) و تست خودکار تبدیل متن:**\n"
         "روی فایل موزیک ریپلای کنید و بنویسید:\n"
-        "`.cut 00:20 01:05`\n\n"
-        "2️⃣ **ثبت ویدئوی خام بدون واترماک:**\n"
-        "روی ویدئو ریپلای کنید و بنویسید:\n"
+        "`.cut 00:00 01:00`\n\n"
+        "2️⃣ **ثبت بک‌گراند ریلز (ویدئو یا عکس خام بدون واترماک):**\n"
+        "روی ویدئو یا عکس ریپلای کنید و بنویسید:\n"
         "`.setbg`\n\n"
-        "3️⃣ **ساخت ریلز نهایی با متن تاییدشده:**\n"
+        "3️⃣ **ساخت ریلز ۶۰ ثانیه‌ای با اکولایزر و متن بولد:**\n"
         "روی فایل موزیک ریپلای کنید و بنویسید:\n"
-        "`.reel 00:20 01:05 | متن تاییدشده با ایموجی`"
+        "`.reel 00:00 01:00 | متن تاییدشده با ایموجی`"
     )
 
 
@@ -68,7 +68,7 @@ async def handle_setbg(event):
         await event.reply("❌ ابتدا یک ویدئو یا عکس بفرستید و روی آن `.setbg` بزنید.")
         return
 
-    status = await event.reply("⏳ در حال ذخیره ویدئوی پس‌زمینه...")
+    status = await event.reply("⏳ در حال ذخیره بک‌گراند ریلز...")
     if os.path.exists(BG_VIDEO_PATH):
         os.remove(BG_VIDEO_PATH)
 
@@ -81,23 +81,23 @@ async def handle_setbg(event):
         os.replace(downloaded, BG_VIDEO_PATH)
 
     if not os.path.exists(BG_VIDEO_PATH) or os.path.getsize(BG_VIDEO_PATH) == 0:
-        await status.edit("❌ ذخیره ویدئوی پس‌زمینه ناموفق بود.")
+        await status.edit("❌ ذخیره بک‌گراند ناموفق بود.")
         return
 
-    _log(f"ویدئوی پس‌زمینه ذخیره شد: {BG_VIDEO_PATH} ({os.path.getsize(BG_VIDEO_PATH)} bytes)")
-    await status.edit("✅ ویدئوی پس‌زمینه ذخیره شد.")
+    _log(f"بک‌گراند ذخیره شد: {BG_VIDEO_PATH} ({os.path.getsize(BG_VIDEO_PATH)} bytes)")
+    await status.edit("✅ بک‌گراند ریلز ذخیره شد.")
 
 
 @client.on(events.NewMessage(pattern=r"^\.cut(?:\s+(.+))?$"))
 async def handle_cut(event):
     reply = await event.get_reply_message()
     if not _is_audio_or_voice(reply):
-        await event.reply("❌ روی یک فایل موزیک ریپلای کنید و بنویسید: `.cut 00:15 00:55`")
+        await event.reply("❌ روی یک فایل موزیک ریپلای کنید و بنویسید: `.cut 00:00 01:00`")
         return
 
     args = (event.pattern_match.group(1) or "").strip().split()
     if len(args) < 2:
-        await event.reply("❌ فرمت صحیح: `.cut زمان_شروع زمان_پایان` (مثال: `.cut 00:15 00:55`)")
+        await event.reply("❌ فرمت صحیح: `.cut زمان_شروع زمان_پایان` (مثال: `.cut 00:00 01:00`)")
         return
 
     start_str, end_str = args[0], args[1]
@@ -143,12 +143,12 @@ async def handle_reel(event):
     if not _is_audio_or_voice(reply):
         await event.reply(
             "❌ روی فایل موزیک ریپلای کنید و بنویسید:\n"
-            "`.reel 00:20 00:50 | متن تاییدشده با ایموجی`"
+            "`.reel 00:00 01:00 | متن تاییدشده با ایموجی`"
         )
         return
 
     if not os.path.exists(BG_VIDEO_PATH) or os.path.getsize(BG_VIDEO_PATH) == 0:
-        await event.reply("❌ ابتدا یک ویدئوی خام بدون واترماک بفرستید و با `.setbg` ثبت کنید.")
+        await event.reply("❌ ابتدا یک ویدئو یا عکس خام بدون واترماک بفرستید و با `.setbg` ثبت کنید.")
         return
 
     raw_arg = (event.pattern_match.group(1) or "").strip()
@@ -160,11 +160,11 @@ async def handle_reel(event):
 
     time_tokens = time_part.strip().split()
     if len(time_tokens) < 2:
-        await event.reply("❌ زمان شروع و پایان را وارد کنید؛ مثال: `.reel 00:20 00:50 | متن`")
+        await event.reply("❌ زمان شروع و پایان را وارد کنید؛ مثال: `.reel 00:00 01:00 | متن`")
         return
 
     start_str, end_str = time_tokens[0], time_tokens[1]
-    status = await event.reply("🎬 در حال ساخت ریلز با سینک ریتماتیک و واترماک ثابت...")
+    status = await event.reply("🎬 در حال ساخت ریلز ۶۰ ثانیه‌ای با اکولایزر و متن بولد...")
     _log(f"درخواست ساخت ریلز دریافت شد: {start_str} تا {end_str}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
