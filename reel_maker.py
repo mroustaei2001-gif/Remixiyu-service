@@ -19,17 +19,19 @@ MAX_DURATION = 60
 WIDTH = 720
 HEIGHT = 1280
 FPS = 20
-WM_TEXT_ALPHA = 102        # حدود ۴۰ درصد شفافیت برای متن واترمارک
-WM_ICON_OPACITY = 0.82     # وضوح آیکون‌های تلگرام و اینستاگرام
-CHANNEL_AVATAR_SIZE = 38   # سایز کمی بزرگ‌تر و مجزا برای عکس کانال
-CHANNEL_AVATAR_OPACITY = 0.94
+
+# تنظیمات کوچک و جمع‌وجور برای قرار گرفتن روی کلیپ
+WM_TEXT_ALPHA = 105        # حدود ۴۰ درصد شفافیت برای متن واترمارک
+WM_ICON_OPACITY = 0.85     # وضوح آیکون‌های تلگرام و اینستاگرام
+CHANNEL_AVATAR_SIZE = 32   # سایز جمع‌وجور و مجزا برای عکس کانال روی کلیپ
+CHANNEL_AVATAR_OPACITY = 0.92
 EQ_STYLE = "segmented_linear"
 
 EQ_COLOR_PALETTE = [
-    (0, 245, 212, 235),    # فیروزه‌ای نئونی
-    (185, 110, 255, 235),  # بنفش یاسی پرانرژی
-    (255, 159, 28, 235),   # نارنجی کهربایی
-    (72, 229, 132, 235),   # سبز نعنایی
+    (0, 245, 212, 230),    # فیروزه‌ای نئونی
+    (185, 110, 255, 230),  # بنفش یاسی پرانرژی
+    (255, 159, 28, 230),   # نارنجی کهربایی
+    (72, 229, 132, 230),   # سبز نعنایی
 ]
 
 
@@ -68,7 +70,7 @@ def apply_opacity(img: Image.Image, alpha_factor: float) -> Image.Image:
     return Image.merge("RGBA", (r, g, b, a))
 
 
-def load_wm_font(size: int = 15):
+def load_wm_font(size: int = 14):
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -84,7 +86,7 @@ def load_wm_font(size: int = 15):
 
 
 def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Image.Image:
-    """عکس کانال را به‌صورت دایره‌ای و کمی بزرگ‌تر آماده می‌کند."""
+    """عکس کانال را به‌صورت دایره‌ای و جمع‌وجور کنار واترمارک آماده می‌کند."""
     src_path = None
     if os.path.exists(CHANNEL_LOGO_PATH):
         src_path = CHANNEL_LOGO_PATH
@@ -108,7 +110,7 @@ def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Im
             avatar = Image.new("RGBA", (size, size), (0, 0, 0, 0))
             avatar.paste(cropped, (0, 0), mask)
             ImageDraw.Draw(avatar).ellipse(
-                (0, 0, size - 1, size - 1), outline=(255, 255, 255, 190), width=2
+                (0, 0, size - 1, size - 1), outline=(255, 255, 255, 180), width=1
             )
             return apply_opacity(avatar, CHANNEL_AVATAR_OPACITY)
         except Exception as e:
@@ -116,13 +118,13 @@ def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Im
 
     avatar = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(avatar)
-    draw.ellipse((1, 1, size - 2, size - 2), fill=(30, 30, 36, 235), outline=(255, 255, 255, 190), width=2)
-    badge_font = font_badge or load_wm_font(max(12, size // 2))
+    draw.ellipse((1, 1, size - 2, size - 2), fill=(30, 30, 36, 230), outline=(255, 255, 255, 180), width=1)
+    badge_font = font_badge or load_wm_font(max(11, size // 2))
     label = "R"
     bbox = draw.textbbox((0, 0), label, font=badge_font)
     lw = bbox[2] - bbox[0]
     lh = bbox[3] - bbox[1]
-    draw.text(((size - lw) // 2, (size - lh) // 2 - 1), label, font=badge_font, fill=(255, 255, 255, 240))
+    draw.text(((size - lw) // 2, (size - lh) // 2 - 1), label, font=badge_font, fill=(255, 255, 255, 235))
     return apply_opacity(avatar, CHANNEL_AVATAR_OPACITY)
 
 
@@ -189,9 +191,9 @@ def _extract_pcm_envelope(
     total_frames: int,
     af_filter: str | None = None,
     gain: float = 5.0,
+    sample_rate: int = 8000,
 ) -> list[float]:
-    """انرژی هر فریم از سیگنال صوتی را استخراج می‌کند."""
-    sample_rate = 4000
+    """انرژی هر فریم از سیگنال صوتی را برای باند فرکانسی مشخص استخراج می‌کند."""
     with tempfile.NamedTemporaryFile(suffix=".pcm", delete=False) as tf:
         pcm_path = tf.name
 
@@ -228,13 +230,13 @@ def _extract_pcm_envelope(
         with open(pcm_path, "rb") as f:
             raw = f.read()
     except Exception:
-        return [0.25] * total_frames
+        return [0.22] * total_frames
     finally:
         if os.path.exists(pcm_path):
             os.remove(pcm_path)
 
     if not raw:
-        return [0.25] * total_frames
+        return [0.22] * total_frames
 
     count = len(raw) // 2
     samples = struct.unpack(f"<{count}h", raw[: count * 2])
@@ -252,75 +254,97 @@ def _extract_pcm_envelope(
     return out
 
 
-def extract_emphasis_vocal_envelope(
+def extract_rhythm_and_vocal_envelopes(
     audio_path: str, start_sec: float, duration: float, fps: int
-) -> list[float]:
+) -> tuple[list[float], list[float]]:
     """
-    انرژی وکال + ریتم را استخراج می‌کند و روی کلمات تاکیدی / اوج‌های ناگهانی صدا
-    ضریب تاکید بیشتری اعمال می‌کند تا اکولایزر روی کلمات تاکیدی واضح‌تر خود را نشان دهد.
+    تشخیص مجزا و دقیق‌ترِ ریتم (ضرب/باس) و وکال (صدای خواننده/کلمات تاکیدی)
+    با نرخ نمونه‌برداری ۸۰۰۰ هرتز تا فیلترهای فرکانسی با دقت بیشتری عمل کنند.
     """
     total_frames = max(1, int(duration * fps))
-    vocal_env = _extract_pcm_envelope(
+
+    # تشخیص ریتم: فیلتر پایین‌گذر برای ضرب‌ها و باس‌های کوبشی
+    rhythm_raw = _extract_pcm_envelope(
         audio_path,
         start_sec,
         duration,
         total_frames,
-        af_filter="bandpass=f=1500:w=1800:t=h",
-        gain=6.0,
+        af_filter="lowpass=f=240:p=1,highpass=f=45:p=1",
+        gain=5.2,
+        sample_rate=8000,
     )
-    rhythm_env = _extract_pcm_envelope(
+
+    # تشخیص وکال: فیلتر میان‌گذر در محدوده صدای خواننده و هارمونیک‌های وکال
+    vocal_raw = _extract_pcm_envelope(
         audio_path,
         start_sec,
         duration,
         total_frames,
-        af_filter=None,
-        gain=4.2,
+        af_filter="bandpass=f=1450:w=1600:t=h",
+        gain=6.2,
+        sample_rate=8000,
     )
 
-    base_sig = [min(1.0, v * 0.78 + r * 0.22) for v, r in zip(vocal_env, rhythm_env)]
-    avg_energy = sum(base_sig) / max(1, len(base_sig))
+    rhythm_avg = sum(rhythm_raw) / max(1, len(rhythm_raw))
+    vocal_avg = sum(vocal_raw) / max(1, len(vocal_raw))
 
-    emphasized: list[float] = []
-    prev_raw = base_sig[0] if base_sig else 0.2
-    prev_out = 0.2
+    rhythm_env: list[float] = []
+    vocal_env: list[float] = []
 
-    for cur_raw in base_sig:
-        delta = max(0.0, cur_raw - prev_raw)
-        accent_boost = delta * 1.9
-        if cur_raw > avg_energy * 1.15:
-            accent_boost += (cur_raw - avg_energy * 1.15) * 0.85
+    prev_r_raw = rhythm_raw[0] if rhythm_raw else 0.2
+    prev_v_raw = vocal_raw[0] if vocal_raw else 0.2
+    prev_r_out = 0.18
+    prev_v_out = 0.18
 
-        target = min(1.0, cur_raw + accent_boost)
-        cur_out = max(0.05, target * 0.82 + prev_out * 0.18)
-        prev_raw = cur_raw
-        prev_out = cur_out
-        emphasized.append(cur_out)
+    for r_cur, v_cur in zip(rhythm_raw, vocal_raw):
+        # ضرب‌های ناگهانی ریتم را تیزتر تشخیص می‌دهد
+        r_hit = max(0.0, r_cur - prev_r_raw) * 2.1
+        if r_cur > rhythm_avg * 1.18:
+            r_hit += (r_cur - rhythm_avg * 1.18) * 0.8
+        r_target = min(1.0, r_cur * 0.85 + r_hit)
+        r_out = max(0.05, r_target * 0.84 + prev_r_out * 0.16)
 
-    return emphasized
+        # تاکید وکال را نرم‌تر و دقیق‌تر روی کلمات و اوج صدا نشان می‌دهد
+        v_accent = max(0.0, v_cur - prev_v_raw) * 1.65
+        if v_cur > vocal_avg * 1.15:
+            v_accent += (v_cur - vocal_avg * 1.15) * 0.75
+        v_target = min(1.0, v_cur * 0.88 + v_accent)
+        v_out = max(0.05, v_target * 0.80 + prev_v_out * 0.20)
+
+        rhythm_env.append(r_out)
+        vocal_env.append(v_out)
+
+        prev_r_raw, prev_v_raw = r_cur, v_cur
+        prev_r_out, prev_v_out = r_out, v_out
+
+    return rhythm_env, vocal_env
 
 
-def draw_linear_equalizer(
+def draw_compact_dual_equalizer(
     frame: Image.Image,
     f_idx: int,
-    amp: float,
+    rhythm_amp: float,
+    vocal_amp: float,
     eq_rgba: tuple[int, int, int, int],
     style: str = EQ_STYLE,
 ) -> int:
     """
-    اکولایزر خطی با سرعت حرکتِ آهسته‌تر از راست به چپ و واکنش بیشتر روی کلمات تاکیدی.
+    اکولایزر کوچک و جمع‌وجور مخصوص روی کلیپ:
+    بخش میانی حساس‌تر به وکال و بخش‌های کناری/ضرب‌پذیر حساس‌تر به ریتم.
     """
     draw = ImageDraw.Draw(frame)
     r, g, b, alpha = eq_rgba
     main_color = (r, g, b, alpha)
-    dim_color = (r, g, b, max(70, alpha // 2))
+    dim_color = (r, g, b, max(65, alpha // 2))
 
-    line_count = 44
-    line_w = 4
-    gap = 6
+    # ابعاد کوچک و متعادل تا روی کلیپ مزاحم نباشد
+    line_count = 32
+    line_w = 3
+    gap = 5
     total_w = line_count * line_w + (line_count - 1) * gap
     start_x = (WIDTH - total_w) // 2
-    base_y = HEIGHT - 150
-    max_h = 88
+    base_y = HEIGHT - 135
+    max_h = 46
 
     draw.line(
         [(start_x, base_y + 2), (start_x + total_w, base_y + 2)],
@@ -328,24 +352,30 @@ def draw_linear_equalizer(
         width=2,
     )
 
-    right_to_left_phase = f_idx * 0.22
+    right_to_left_phase = f_idx * 0.20
 
     for i in range(line_count):
-        norm_pos = (i / max(1, line_count - 1)) * 2.0 - 1.0
-        center_weight = max(0.32, 1.0 - 0.52 * abs(norm_pos))
+        norm_pos = (i / max(1, line_count - 1)) * 2.0 - 1.0  # -1 تا +1
+        dist_center = abs(norm_pos)
 
-        travel_wave = abs(math.sin(right_to_left_phase - i * 0.28)) ** 1.25
-        emphasis_pulse = 0.65 + 0.35 * (amp ** 1.3)
-        h = max(5, int(max_h * amp * center_weight * travel_wave * emphasis_pulse))
+        # وزن وکال در مرکز بیشتر و وزن ریتم در اطراف بیشتر است
+        vocal_weight = max(0.25, 1.0 - 0.75 * dist_center)
+        rhythm_weight = max(0.35, 0.45 + 0.55 * dist_center)
+        blended_amp = vocal_amp * vocal_weight * 0.58 + rhythm_amp * rhythm_weight * 0.52
+        blended_amp = min(1.0, blended_amp)
+
+        shape_weight = max(0.35, 1.0 - 0.45 * dist_center)
+        travel_wave = abs(math.sin(right_to_left_phase - i * 0.30)) ** 1.2
+        h = max(4, int(max_h * blended_amp * shape_weight * travel_wave))
 
         x = start_x + i * (line_w + gap)
         if style == "dual_linear":
-            mid_y = base_y - 38
-            half_h = max(4, h // 2)
+            mid_y = base_y - 20
+            half_h = max(3, h // 2)
             draw.line([(x, mid_y - half_h), (x, mid_y + half_h)], fill=main_color, width=line_w)
         else:
-            seg_h = 7
-            seg_gap = 3
+            seg_h = 5
+            seg_gap = 2
             cur_y = base_y
             drawn = 0
             while drawn < h and cur_y > base_y - max_h:
@@ -362,11 +392,11 @@ def make_fixed_bottom_watermark(
     ig_logo: Image.Image,
     channel_avatar: Image.Image,
     font_wm,
-    icon_size: int = 18,
+    icon_size: int = 16,
 ) -> Image.Image:
     """
-    عکس کانال را به‌صورت مجزا و کمی بزرگ‌تر کنار بخش واترمارک (آیکون‌های TG/IG + متن‌ها)
-    و در یک ترکیبِ متعادل و هم‌تراز قرار می‌دهد.
+    عکس کانال را به‌صورت مجزا و جمع‌وجور کنار بخش واترمارک (آیکون‌های TG/IG + متن‌ها)
+    و در یک ترکیب متعادل و هم‌تراز قرار می‌دهد.
     """
     temp_img = Image.new("RGBA", (1, 1))
     temp_draw = ImageDraw.Draw(temp_img)
@@ -378,11 +408,11 @@ def make_fixed_bottom_watermark(
     tg_w, tg_h = text_size(TG_TEXT)
     ig_w, ig_h = text_size(IG_TEXT)
 
-    icon_text_gap = 6
-    group_gap = 16
-    avatar_to_wm_gap = 10
-    pad_x = 6
-    pad_y = 4
+    icon_text_gap = 5
+    group_gap = 14
+    avatar_to_wm_gap = 8
+    pad_x = 4
+    pad_y = 3
 
     tg_group_w = icon_size + icon_text_gap + tg_w
     ig_group_w = icon_size + icon_text_gap + ig_w
@@ -436,9 +466,9 @@ def build_synced_reel(
     lyrics_text: str = "",
 ) -> tuple[bool, str]:
     """
-    بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
-    صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی را با حرکت آرام از راست به چپ و واکنش قوی‌تر به کلمات تاکیدی
-    روی بک‌گراند می‌گذارد و عکس کانال + واترمارک را در وسط و زیر اکولایزر با فاصله کم و کیفیت بالا ذخیره می‌کند.
+    کلیپ پس‌زمینه را هم‌اندازه تایم موزیک کات می‌زند، صدای اصلی کلیپ را قطع می‌کند،
+    اکولایزر کوچک و حساس به ریتم و وکال را در پایین قرار می‌دهد و عکس کانال + واترمارک را
+    در وسط و زیر اکولایزر با فاصله کم و کیفیت بالا ذخیره می‌کند.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -451,17 +481,17 @@ def build_synced_reel(
         return False, "زمان پایان باید بزرگ‌تر از زمان شروع باشد."
 
     duration = min(end_sec - start_sec, float(MAX_DURATION))
-    _log(f"شروع ساخت ریلز به مدت {duration:.1f} ثانیه (بدون متن؛ تمرکز بر موزیک و اکولایزر)")
+    _log(f"شروع ساخت ریلز {duration:.1f} ثانیه‌ای با اکولایزر کوچکِ ریتم و وکال")
 
-    energies = extract_emphasis_vocal_envelope(audio_path, start_sec, duration, FPS)
+    rhythm_env, vocal_env = extract_rhythm_and_vocal_envelopes(audio_path, start_sec, duration, FPS)
 
     ensure_default_logos()
-    icon_px = 18
-    font_wm = load_wm_font(15)
+    icon_px = 16
+    font_wm = load_wm_font(14)
 
     tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((icon_px, icon_px)), WM_ICON_OPACITY)
     ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((icon_px, icon_px)), WM_ICON_OPACITY)
-    channel_avatar = build_channel_avatar(size=CHANNEL_AVATAR_SIZE, font_badge=load_wm_font(18))
+    channel_avatar = build_channel_avatar(size=CHANNEL_AVATAR_SIZE, font_badge=load_wm_font(15))
 
     wm_block = make_fixed_bottom_watermark(
         tg_logo=tg_logo,
@@ -473,8 +503,8 @@ def build_synced_reel(
     wm_w, wm_h = wm_block.size
 
     fixed_wm_x = (WIDTH - wm_w) // 2
-    eq_bottom_y = HEIGHT - 146
-    gap_below_eq = 10
+    eq_bottom_y = HEIGHT - 131
+    gap_below_eq = 8
     fixed_wm_y = min(HEIGHT - wm_h - 10, eq_bottom_y + gap_below_eq)
 
     is_video = video_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
@@ -566,12 +596,13 @@ def build_synced_reel(
                 break
 
             frame = Image.frombytes("RGB", (WIDTH, HEIGHT), raw_frame).convert("RGBA")
-            amp = energies[f_idx] if f_idx < len(energies) else 0.2
+            r_amp = rhythm_env[f_idx] if f_idx < len(rhythm_env) else 0.2
+            v_amp = vocal_env[f_idx] if f_idx < len(vocal_env) else 0.2
 
             color_idx = (f_idx // max(1, FPS * 8)) % len(EQ_COLOR_PALETTE)
             eq_rgba = EQ_COLOR_PALETTE[color_idx]
 
-            draw_linear_equalizer(frame, f_idx, amp, eq_rgba, style=EQ_STYLE)
+            draw_compact_dual_equalizer(frame, f_idx, r_amp, v_amp, eq_rgba, style=EQ_STYLE)
             frame.paste(wm_block, (fixed_wm_x, fixed_wm_y), wm_block)
 
             try:
@@ -640,7 +671,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با کیفیت بالاتر و اکولایزر آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر کوچکِ ریتم و وکال آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
