@@ -15,14 +15,19 @@ def ensure_default_logos():
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         draw.ellipse((2, 2, 62, 62), fill=(36, 161, 222, 235))
-        draw.polygon([(16, 33), (48, 19), (41, 47), (31, 38), (26, 43), (26, 36)], fill=(255, 255, 255, 255))
+        draw.polygon(
+            [(16, 33), (48, 19), (41, 47), (31, 38), (26, 43), (26, 36)],
+            fill=(255, 255, 255, 255),
+        )
         img.save(TG_LOGO_PATH)
 
     if not os.path.exists(IG_LOGO_PATH):
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         draw.rounded_rectangle((4, 4, 60, 60), radius=16, fill=(225, 48, 108, 235))
-        draw.rounded_rectangle((13, 13, 51, 51), radius=11, outline=(255, 255, 255, 255), width=4)
+        draw.rounded_rectangle(
+            (13, 13, 51, 51), radius=11, outline=(255, 255, 255, 255), width=4
+        )
         draw.ellipse((23, 23, 41, 41), outline=(255, 255, 255, 255), width=4)
         draw.ellipse((43, 17, 47, 21), fill=(255, 255, 255, 255))
         img.save(IG_LOGO_PATH)
@@ -65,8 +70,11 @@ def build_reel_video(
     duration = min(end_sec - start_sec, MAX_DURATION)
 
     has_bg = os.path.exists(bg_path)
-    is_video_bg = has_bg and bg_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
+    is_video_bg = has_bg and bg_path.lower().endswith(
+        (".mp4", ".mov", ".mkv", ".webm")
+    )
 
+    # ایندکس 0: پس‌زمینه 1080x1920
     if is_video_bg:
         bg_inputs = ["-stream_loop", "-1", "-i", bg_path]
     elif has_bg:
@@ -80,18 +88,20 @@ def build_reel_video(
     ]
     current_label = "v0"
     next_input_idx = 1
+    step_idx = 1
 
     # متن قلاب اختیاری
     if hook_text.strip():
         safe_hook = _escape_drawtext(hook_text.strip())
-        next_label = f"v{next_input_idx}"
+        hook_lbl = f"v_hook_{step_idx}"
+        step_idx += 1
         filters.append(
             f"[{current_label}]drawtext=text='{safe_hook}':"
             f"fontcolor=white@0.95:fontsize=42:"
             f"x=(w-text_w)/2:y=340:"
-            f"box=1:boxcolor=black@0.45:boxborderw=14[{next_label}]"
+            f"box=1:boxcolor=black@0.45:boxborderw=14[{hook_lbl}]"
         )
-        current_label = next_label
+        current_label = hook_lbl
 
     # واترماک تلگرام: [لوگو] + t.me/remixiyu
     tg_y = 140
@@ -99,17 +109,19 @@ def build_reel_video(
     next_input_idx += 1
     bg_inputs.extend(["-i", TG_LOGO_PATH])
 
-    tg_icon_lbl = f"tg_ico_{next_input_idx}"
-    tg_comp_lbl = f"v{next_input_idx}"
-    next_input_idx += 1
+    tg_icon_lbl = f"tg_ico_{step_idx}"
+    tg_comp_lbl = f"v_tg_{step_idx}"
+    step_idx += 1
 
     filters.append(f"[{tg_logo_idx}:v]scale=40:40[{tg_icon_lbl}]")
-    filters.append(f"[{current_label}][{tg_icon_lbl}]overlay=x=305:y={tg_y}+4[{tg_comp_lbl}]")
+    filters.append(
+        f"[{current_label}][{tg_icon_lbl}]overlay=x=305:y={tg_y}+4[{tg_comp_lbl}]"
+    )
     current_label = tg_comp_lbl
 
     safe_tg = _escape_drawtext(TG_TEXT)
-    tg_txt_lbl = f"v{next_input_idx}"
-    next_input_idx += 1
+    tg_txt_lbl = f"v_tg_txt_{step_idx}"
+    step_idx += 1
     filters.append(
         f"[{current_label}]drawtext=text='{safe_tg}':"
         f"fontcolor=white@0.85:fontsize=32:"
@@ -124,17 +136,19 @@ def build_reel_video(
     next_input_idx += 1
     bg_inputs.extend(["-i", IG_LOGO_PATH])
 
-    ig_icon_lbl = f"ig_ico_{next_input_idx}"
-    ig_comp_lbl = f"v{next_input_idx}"
-    next_input_idx += 1
+    ig_icon_lbl = f"ig_ico_{step_idx}"
+    ig_comp_lbl = f"v_ig_{step_idx}"
+    step_idx += 1
 
     filters.append(f"[{ig_logo_idx}:v]scale=40:40[{ig_icon_lbl}]")
-    filters.append(f"[{current_label}][{ig_icon_lbl}]overlay=x=345:y={ig_y}+4[{ig_comp_lbl}]")
+    filters.append(
+        f"[{current_label}][{ig_icon_lbl}]overlay=x=345:y={ig_y}+4[{ig_comp_lbl}]"
+    )
     current_label = ig_comp_lbl
 
     safe_ig = _escape_drawtext(IG_TEXT)
-    ig_txt_lbl = f"v{next_input_idx}"
-    next_input_idx += 1
+    ig_txt_lbl = f"v_ig_txt_{step_idx}"
+    step_idx += 1
     filters.append(
         f"[{current_label}]drawtext=text='{safe_ig}':"
         f"fontcolor=white@0.85:fontsize=32:"
@@ -143,6 +157,7 @@ def build_reel_video(
     )
     current_label = ig_txt_lbl
 
+    # ایندکس واقعی فایل صوتی (بعد از پس‌زمینه و دو لوگو = 3)
     audio_input_idx = next_input_idx
     filter_complex = ";".join(filters)
 
@@ -182,5 +197,5 @@ def build_reel_video(
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return True, f"ریلز {duration} ثانیه‌ای (1080x1920) با واترماک آماده شد."
     except subprocess.CalledProcessError as e:
-        err = e.stderr.decode("utf-8", errors="ignore")[-220:]
+        err = e.stderr.decode("utf-8", errors="ignore")[-240:]
         return False, f"خطا در ffmpeg: {err}"
