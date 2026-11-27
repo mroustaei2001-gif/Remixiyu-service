@@ -33,6 +33,20 @@ def ensure_default_logos():
         img.save(IG_LOGO_PATH)
 
 
+def find_font_file() -> str:
+    """یک فایل فونت معتبر روی سیستم پیدا می‌کند تا drawtext خطای فونت ندهد."""
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return ""
+
+
 def parse_time_to_seconds(t_str: str) -> int:
     parts = [int(x.strip()) for x in t_str.strip().split(":")]
     if len(parts) == 2:
@@ -82,6 +96,9 @@ def build_reel_video(
     else:
         bg_inputs = ["-f", "lavfi", "-i", "color=c=#0b0e17:s=1080x1920:r=30"]
 
+    font_path = find_font_file()
+    font_opt = f":fontfile='{_escape_drawtext(font_path)}'" if font_path else ""
+
     filters = [
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,setsar=1,eq=brightness=-0.10,format=rgba[v0]"
@@ -96,7 +113,7 @@ def build_reel_video(
         hook_lbl = f"v_hook_{step_idx}"
         step_idx += 1
         filters.append(
-            f"[{current_label}]drawtext=text='{safe_hook}':"
+            f"[{current_label}]drawtext=text='{safe_hook}'{font_opt}:"
             f"fontcolor=white@0.95:fontsize=42:"
             f"x=(w-text_w)/2:y=340:"
             f"box=1:boxcolor=black@0.45:boxborderw=14[{hook_lbl}]"
@@ -123,7 +140,7 @@ def build_reel_video(
     tg_txt_lbl = f"v_tg_txt_{step_idx}"
     step_idx += 1
     filters.append(
-        f"[{current_label}]drawtext=text='{safe_tg}':"
+        f"[{current_label}]drawtext=text='{safe_tg}'{font_opt}:"
         f"fontcolor=white@0.85:fontsize=32:"
         f"x=358:y={tg_y}+8:"
         f"shadowcolor=black@0.7:shadowx=2:shadowy=2[{tg_txt_lbl}]"
@@ -150,7 +167,7 @@ def build_reel_video(
     ig_txt_lbl = f"v_ig_txt_{step_idx}"
     step_idx += 1
     filters.append(
-        f"[{current_label}]drawtext=text='{safe_ig}':"
+        f"[{current_label}]drawtext=text='{safe_ig}'{font_opt}:"
         f"fontcolor=white@0.85:fontsize=32:"
         f"x=398:y={ig_y}+8:"
         f"shadowcolor=black@0.7:shadowx=2:shadowy=2[{ig_txt_lbl}]"
@@ -164,6 +181,9 @@ def build_reel_video(
     cmd = [
         "ffmpeg",
         "-y",
+        "-nostats",
+        "-loglevel",
+        "error",
         *bg_inputs,
         "-ss",
         str(start_sec),
@@ -197,11 +217,5 @@ def build_reel_video(
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return True, f"ریلز {duration} ثانیه‌ای (1080x1920) با واترماک آماده شد."
     except subprocess.CalledProcessError as e:
-        raw_err = e.stderr.decode("utf-8", errors="ignore")
-        err_lines = [
-            line.strip()
-            for line in raw_err.splitlines()
-            if any(k in line.lower() for k in ("error", "invalid", "no such", "failed", "unable"))
-        ]
-        tail_err = "\n".join(err_lines[-6:]) if err_lines else raw_err[-1200:]
-        return False, f"خطا در ffmpeg:\n{tail_err[-900:]}"
+        raw_err = e.stderr.decode("utf-8", errors="ignore").strip()
+        return False, f"خطا در ffmpeg:\n{raw_err[-1500:] if raw_err else 'خروجی خطا خالی بود'}"
