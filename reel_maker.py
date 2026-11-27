@@ -62,50 +62,6 @@ if arabic_reshaper is not None:
     except Exception:
         _FA_RESHAPER = None
 
-# جدول فرم‌های چهارگانه حروف فارسی: (جدا، پایانی، آغازین، میانی)
-_PERSIAN_GLYPH_FORMS: dict[str, tuple[str, str, str, str]] = {
-    "آ": ("\uFE81", "\uFE82", "\uFE81", "\uFE82"),
-    "ا": ("\uFE8D", "\uFE8E", "\uFE8D", "\uFE8E"),
-    "أ": ("\uFE83", "\uFE84", "\uFE83", "\uFE84"),
-    "إ": ("\uFE87", "\uFE88", "\uFE87", "\uFE88"),
-    "ئ": ("\uFE89", "\uFE8A", "\uFE8B", "\uFE8C"),
-    "ب": ("\uFE8F", "\uFE90", "\uFE91", "\uFE92"),
-    "پ": ("\uFB56", "\uFB57", "\uFB58", "\uFB59"),
-    "ت": ("\uFE95", "\uFE96", "\uFE97", "\uFE98"),
-    "ث": ("\uFE99", "\uFE9A", "\uFE9B", "\uFE9C"),
-    "ج": ("\uFE9D", "\uFE9E", "\uFE9F", "\uFEA0"),
-    "چ": ("\uFB7A", "\uFB7B", "\uFB7C", "\uFB7D"),
-    "ح": ("\uFEA1", "\uFEA2", "\uFEA3", "\uFEA4"),
-    "خ": ("\uFEA5", "\uFEA6", "\uFEA7", "\uFEA8"),
-    "د": ("\uFEA9", "\uFEAA", "\uFEA9", "\uFEAA"),
-    "ذ": ("\uFEAB", "\uFEAC", "\uFEAB", "\uFEAC"),
-    "ر": ("\uFEAD", "\uFEAE", "\uFEAD", "\uFEAE"),
-    "ز": ("\uFEAF", "\uFEB0", "\uFEAF", "\uFEB0"),
-    "ژ": ("\uFB8A", "\uFB8B", "\uFB8A", "\uFB8B"),
-    "س": ("\uFEB1", "\uFEB2", "\uFEB3", "\uFEB4"),
-    "ش": ("\uFEB5", "\uFEB6", "\uFEB7", "\uFEB8"),
-    "ص": ("\uFEB9", "\uFEBA", "\uFEBB", "\uFEBC"),
-    "ض": ("\uFEBD", "\uFEBE", "\uFEBF", "\uFEC0"),
-    "ط": ("\uFEC1", "\uFEC2", "\uFEC3", "\uFEC4"),
-    "ظ": ("\uFEC5", "\uFEC6", "\uFEC7", "\uFEC8"),
-    "ع": ("\uFEC9", "\uFECA", "\uFECB", "\uFECC"),
-    "غ": ("\uFECD", "\uFECE", "\uFECF", "\uFED0"),
-    "ف": ("\uFED1", "\uFED2", "\uFED3", "\uFED4"),
-    "ق": ("\uFED5", "\uFED6", "\uFED7", "\uFED8"),
-    "ک": ("\uFB8E", "\uFB8F", "\uFB90", "\uFB91"),
-    "گ": ("\uFB92", "\uFB93", "\uFB94", "\uFB95"),
-    "ل": ("\uFEDD", "\uFEDE", "\uFEDF", "\uFEE0"),
-    "م": ("\uFEE1", "\uFEE2", "\uFEE3", "\uFEE4"),
-    "ن": ("\uFEE5", "\uFEE6", "\uFEE7", "\uFEE8"),
-    "و": ("\uFEED", "\uFEEE", "\uFEED", "\uFEEE"),
-    "ؤ": ("\uFE85", "\uFE86", "\uFE85", "\uFE86"),
-    "ه": ("\uFEE9", "\uFEEA", "\uFEEB", "\uFEEC"),
-    "ی": ("\uFBFC", "\uFBFD", "\uFBFE", "\uFBFF"),
-}
-
-_RIGHT_JOIN_ONLY = {"آ", "ا", "أ", "إ", "د", "ذ", "ر", "ز", "ژ", "و", "ؤ"}
-_PUNCT_MIRROR = {"؟": "؟", "?": "؟", "!": "!", "«": "»", "»": "«", "(": ")", ")": "("}
-
 
 def _log(msg: str):
     print(f"[REEL_MAKER] {msg}", file=sys.stderr, flush=True)
@@ -117,94 +73,6 @@ def _normalize_persian_chars(text: str) -> str:
     s = s.replace("ك", "ک").replace("ي", "ی").replace("ى", "ی").replace("ۀ", "ه")
     s = re.sub(r"\s+", " ", s).strip()
     return s
-
-
-def _shape_single_word(word: str) -> str:
-    """حروف یک کلمه فارسی را به هم متصل می‌کند و برای رندر چپ‌به‌راستِ Pillow معکوس می‌کند."""
-    normalized = (
-        word.replace("لآ", "\uFEF5")
-        .replace("لأ", "\uFEF7")
-        .replace("لإ", "\uFEF9")
-        .replace("لا", "\uFEFB")
-    )
-    chars = list(normalized)
-    out_chars: list[str] = []
-    n = len(chars)
-
-    for idx, ch in enumerate(chars):
-        if ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB"):
-            prev_ch = chars[idx - 1] if idx > 0 else ""
-            can_join_prev = (
-                prev_ch in _PERSIAN_GLYPH_FORMS and prev_ch not in _RIGHT_JOIN_ONLY
-            )
-            out_chars.append(chr(ord(ch) + 1) if can_join_prev else ch)
-            continue
-
-        if ch not in _PERSIAN_GLYPH_FORMS:
-            out_chars.append(_PUNCT_MIRROR.get(ch, ch))
-            continue
-
-        prev_ch = chars[idx - 1] if idx > 0 else ""
-        next_ch = chars[idx + 1] if idx + 1 < n else ""
-
-        can_join_prev = (
-            prev_ch in _PERSIAN_GLYPH_FORMS and prev_ch not in _RIGHT_JOIN_ONLY
-        )
-        can_join_next = (
-            ch not in _RIGHT_JOIN_ONLY
-            and (
-                next_ch in _PERSIAN_GLYPH_FORMS
-                or next_ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB")
-            )
-        )
-
-        isolated, final, initial, medial = _PERSIAN_GLYPH_FORMS[ch]
-        if can_join_prev and can_join_next:
-            out_chars.append(medial)
-        elif can_join_prev:
-            out_chars.append(final)
-        elif can_join_next:
-            out_chars.append(initial)
-        else:
-            out_chars.append(isolated)
-
-    return "".join(reversed(out_chars))
-
-
-def _builtin_persian_reshape_and_bidi(text: str) -> str:
-    """
-    چینش راست‌به‌چپ دقیق برای Pillow:
-    در عبارت فارسی «کلمه۱ کلمه۲؟»، در رسم چپ‌به‌راستِ Pillow باید «؟۲هملک ۱هملک» قرار بگیرد
-    تا وقتی چشم از راست به چپ می‌خواند، «کلمه۱ کلمه۲؟» در جهت درست خوانده شود.
-    """
-    words = [w for w in text.split() if w.strip()]
-    if not words:
-        return ""
-
-    shaped_words = [_shape_single_word(w) for w in words]
-    # معکوس کردن ترتیب کلمات تا در رسم چپ‌به‌راستِ Pillow، عبارت از راست به چپ خوانده شود
-    return " ".join(reversed(shaped_words))
-
-
-def _shape_persian_text(text: str) -> str:
-    """متن فارسی را نرمال، متصل و راست‌به‌چپ مرتب می‌کند."""
-    s = _normalize_persian_chars(text)
-    if not s:
-        return ""
-    has_persian = any("\u0600" <= ch <= "\u06FF" for ch in s)
-    if not has_persian:
-        return s
-
-    if _FA_RESHAPER is not None and get_display is not None:
-        try:
-            reshaped = _FA_RESHAPER.reshape(s)
-            bidi_out = get_display(reshaped)
-            if isinstance(bidi_out, str) and bidi_out.strip():
-                return bidi_out
-        except Exception:
-            pass
-
-    return _builtin_persian_reshape_and_bidi(s)
 
 
 def ensure_default_logos():
@@ -261,7 +129,7 @@ def download_font_if_needed() -> str | None:
     return None
 
 
-def load_bold_font(size: int):
+def get_bold_font_path() -> str | None:
     downloaded = download_font_if_needed()
     candidates = [
         downloaded,
@@ -273,10 +141,17 @@ def load_bold_font(size: int):
     ]
     for path in candidates:
         if path and os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size=size)
-            except Exception:
-                pass
+            return path
+    return None
+
+
+def load_bold_font(size: int):
+    path = get_bold_font_path()
+    if path:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
+            pass
     return ImageFont.load_default()
 
 
@@ -480,11 +355,13 @@ def _extract_pcm_envelope(
     return out
 
 
-def extract_vocal_and_rhythm_envelope(
+def extract_vocal_and_rhythm_envelopes(
     audio_path: str, start_sec: float, duration: float, fps: int
-) -> list[float]:
+) -> tuple[list[float], list[float]]:
     """
-    انرژی را با تمرکز بالا روی وکال (حدود ۳۰۰ تا ۳۲۰۰ هرتز) و کمی ریتم کلی آهنگ استخراج می‌کند.
+    انرژی وکال و ترکیب وکال+ریتم را استخراج می‌کند:
+    - خروجی اول: ترکیب ۷۸٪ وکال + ۲۲٪ ریتم برای حرکت اکولایزر خطی
+    - خروجی دوم: انرژی خالص وکال برای تشخیص بازه‌های فعالِ خواندن و سینک متن
     """
     total_frames = max(1, int(duration * fps))
     vocal_env = _extract_pcm_envelope(
@@ -511,7 +388,7 @@ def extract_vocal_and_rhythm_envelope(
         cur = max(0.06, target * 0.82 + prev_v * 0.18)
         prev_v = cur
         combined.append(cur)
-    return combined
+    return combined, vocal_env
 
 
 def _clean_phrase_text(raw: str) -> str:
@@ -522,60 +399,202 @@ def _clean_phrase_text(raw: str) -> str:
     return cleaned
 
 
-def build_rhythmic_cues(
-    lyrics_text: str, duration: float, fps: int, energies: list[float]
+def build_vocal_synced_cues(
+    lyrics_text: str, duration: float, fps: int, vocal_env: list[float]
 ) -> list[tuple[int, int, str]]:
     """
-    متن را تمیز و به عبارات منسجم تقسیم می‌کند و با زمان‌بندی دقیق‌تر و روان‌تر
-    روی بازه فریم‌ها می‌نشاند.
+    متن را بر اساس خط‌بندی کاربر (یا جداکننده |) می‌گیرد و فقط در فریم‌هایی که
+    انرژی وکال فعال است توزیع می‌کند تا متن در بخش‌های بی‌کلام جلو نزند و با خواننده سینک بماند.
     """
     clean = lyrics_text.strip()
     if not clean:
         return []
 
+    has_explicit_lines = ("\n" in clean) or ("|" in clean)
     raw_chunks = [part.strip() for part in re.split(r"\n+|\s*\|\s*", clean) if part.strip()]
+
     phrases: list[str] = []
     for ch in raw_chunks:
         cleaned_ch = _clean_phrase_text(ch)
         if not cleaned_ch:
             continue
         words = [w.strip() for w in cleaned_ch.split() if w.strip()]
-        if len(words) <= 3:
+        # اگر کاربر خط‌بندی دستی کرده باشد، به خطوط او احترام می‌گذاریم (تا ۵ کلمه در یک خط)
+        max_words = 5 if has_explicit_lines else 3
+        if len(words) <= max_words:
             phrases.append(cleaned_ch)
         else:
-            for i in range(0, len(words), 3):
-                part_phrase = " ".join(words[i : i + 3]).strip()
+            for i in range(0, len(words), max_words):
+                part_phrase = " ".join(words[i : i + max_words]).strip()
                 if part_phrase:
                     phrases.append(part_phrase)
 
     if not phrases:
         return []
 
-    total_frames = max(1, int(duration * fps))
+    total_frames = max(1, len(vocal_env))
+    # آستانه تشخیص فعال بودن صدای خواننده در هر فریم
+    avg_vocal = sum(vocal_env) / total_frames
+    threshold = max(0.14, avg_vocal * 0.58)
+    active_frames = [idx for idx, val in enumerate(vocal_env) if val >= threshold]
+
+    # اگر کل فایل خیلی آرام بود، از کل فریم‌ها استفاده می‌کنیم
+    if len(active_frames) < len(phrases) * 4:
+        active_frames = list(range(total_frames))
+
     weights = []
     for p in phrases:
         word_cnt = max(1, len(p.split()))
         char_cnt = len(re.sub(r"\s+", "", p))
-        weights.append(max(2.6, word_cnt * 2.0 + char_cnt * 0.4))
+        weights.append(max(2.5, word_cnt * 2.1 + char_cnt * 0.45))
 
     total_w = sum(weights)
+    n_active = len(active_frames)
     cues: list[tuple[int, int, str]] = []
-    cursor = max(1, int(fps * 0.15))
+    act_cursor = 0
 
     for idx, (phrase, w) in enumerate(zip(phrases, weights)):
-        if cursor >= total_frames - 1:
+        if act_cursor >= n_active:
             break
-        span = max(int(fps * 0.95), int(round((total_frames - cursor) * (w / total_w))))
-        start_f = min(cursor, total_frames - 1)
-        if idx == len(phrases) - 1:
-            end_f = total_frames - 1
-        else:
-            end_f = min(total_frames - 1, max(start_f + 3, start_f + span - 2))
+        remaining_w = sum(weights[idx:])
+        remaining_act = n_active - act_cursor
+        take = max(4, int(round(remaining_act * (w / max(0.1, remaining_w)))))
+        end_act = n_active - 1 if idx == len(phrases) - 1 else min(n_active - 1, act_cursor + take - 1)
+
+        start_f = active_frames[act_cursor]
+        end_f = active_frames[end_act]
+        if end_f < start_f:
+            end_f = start_f
 
         cues.append((start_f, end_f, phrase))
-        cursor = end_f + 2
+        act_cursor = end_act + 1
 
     return cues
+
+
+def _render_text_via_ffmpeg_drawtext(
+    text: str, font_path: str, color_rgba: tuple[int, int, int, int]
+) -> Image.Image | None:
+    """
+    متن فارسی را مستقیماً با موتور شکل‌دهی داخلی ffmpeg (HarfBuzz/FriBidi) روی تصویر شفاف رندر می‌کند
+    تا حروف فارسی ۱۰۰٪ متصل و راست‌به‌چپ باشند.
+    """
+    if not font_path or not os.path.exists(font_path):
+        return None
+
+    r, g, b, _ = color_rgba
+    hex_color = f"0x{r:02x}{g:02x}{b:02x}"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        txt_file = os.path.join(tmpdir, "line.txt")
+        png_file = os.path.join(tmpdir, "rendered.png")
+        with open(txt_file, "w", encoding="utf-8") as f:
+            f.write(text)
+
+        safe_font = font_path.replace("\\", "/").replace(":", "\\:")
+        safe_txt = txt_file.replace("\\", "/").replace(":", "\\:")
+
+        vf = (
+            f"drawtext=fontfile='{safe_font}':textfile='{safe_txt}':"
+            f"text_shaping=1:fontsize=44:fontcolor={hex_color}:"
+            f"borderw=3:bordercolor=black@0.95:"
+            f"x=(w-text_w)/2:y=(h-text_h)/2"
+        )
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black@0.0:s={WIDTH}x130:d=0.05",
+            "-vf",
+            vf,
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "rgba",
+            png_file,
+        ]
+        try:
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
+            )
+            if os.path.exists(png_file) and os.path.getsize(png_file) > 0:
+                img = Image.open(png_file).convert("RGBA")
+                bbox = img.getbbox()
+                if bbox:
+                    pad_x, pad_y = 26, 16
+                    x0 = max(0, bbox[0] - pad_x)
+                    y0 = max(0, bbox[1] - pad_y)
+                    x1 = min(img.width, bbox[2] + pad_x)
+                    y1 = min(img.height, bbox[3] + pad_y)
+                    cropped = img.crop((x0, y0, x1, y1))
+
+                    bg = Image.new("RGBA", cropped.size, (0, 0, 0, 0))
+                    bdraw = ImageDraw.Draw(bg)
+                    bdraw.rounded_rectangle(
+                        (0, 0, cropped.width - 1, cropped.height - 1),
+                        radius=16,
+                        fill=(0, 0, 0, 145),
+                    )
+                    bg.paste(cropped, (0, 0), cropped)
+                    return bg
+        except Exception as e:
+            _log(f"drawtext fallback فعال شد: {e}")
+    return None
+
+
+def _render_text_via_pillow_fallback(
+    text: str, font_bold, emoji_font, color_rgba: tuple[int, int, int, int]
+) -> Image.Image:
+    """رندر پشتیبان در صورتی که ffmpeg بدون drawtext کامپایل شده باشد."""
+    s = _normalize_persian_chars(text)
+    if _FA_RESHAPER is not None and get_display is not None:
+        try:
+            s = get_display(_FA_RESHAPER.reshape(s))
+        except Exception:
+            pass
+
+    dummy = Image.new("RGBA", (WIDTH, 140), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(dummy)
+    bbox = draw.textbbox((0, 0), s, font=font_bold)
+    tw = max(1, bbox[2] - bbox[0])
+    th = max(1, bbox[3] - bbox[1])
+
+    box_w = min(WIDTH - 32, tw + 56)
+    box_h = th + 36
+    canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    tdraw = ImageDraw.Draw(canvas)
+    tdraw.rounded_rectangle((0, 0, box_w - 1, box_h - 1), radius=16, fill=(0, 0, 0, 145))
+
+    tx = max(10, (box_w - tw) // 2)
+    ty = max(8, (box_h - th) // 2)
+    for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3)):
+        tdraw.text((tx + ox, ty + oy), s, font=font_bold, fill=(0, 0, 0, 240))
+    tdraw.text((tx, ty), s, font=font_bold, fill=color_rgba)
+    return canvas
+
+
+def pre_render_cue_overlays(
+    cues: list[tuple[int, int, str]],
+    font_path: str | None,
+    font_bold,
+    emoji_font,
+) -> dict[int, Image.Image]:
+    """تصویر هر عبارت متنی را فقط یک بار می‌سازد تا ویدئو هم سریع‌تر و هم با فارسی واقعی رندر شود."""
+    overlays: dict[int, Image.Image] = {}
+    for idx, (_, _, phrase) in enumerate(cues):
+        color_rgba = TEXT_COLOR_PALETTE[idx % len(TEXT_COLOR_PALETTE)]
+        norm_phrase = _normalize_persian_chars(phrase)
+        img = (
+            _render_text_via_ffmpeg_drawtext(norm_phrase, font_path, color_rgba)
+            if font_path
+            else None
+        )
+        if img is None:
+            img = _render_text_via_pillow_fallback(norm_phrase, font_bold, emoji_font, color_rgba)
+        overlays[idx] = img
+    return overlays
 
 
 def draw_linear_equalizer(
@@ -654,63 +673,6 @@ def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font
     return block
 
 
-def draw_centered_bold_text(
-    frame: Image.Image,
-    text: str,
-    font_bold,
-    emoji_font,
-    color_rgba: tuple[int, int, int, int],
-):
-    """متن بولد فارسی، رنگی و دارای ایموجی را با چینش راست‌به‌چپ صحیح در وسط ویدئو رسم می‌کند."""
-    rendered_text = _shape_persian_text(text)
-    draw = ImageDraw.Draw(frame)
-    bbox = draw.textbbox((0, 0), rendered_text, font=font_bold)
-    tw = max(1, bbox[2] - bbox[0])
-    th = max(1, bbox[3] - bbox[1])
-
-    pad_x = 28
-    pad_y = 18
-    box_w = min(WIDTH - 32, tw + pad_x * 2)
-    box_h = th + pad_y * 2
-
-    txt_canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
-    tdraw = ImageDraw.Draw(txt_canvas)
-
-    tdraw.rounded_rectangle(
-        (2, 2, box_w - 2, box_h - 2),
-        radius=16,
-        fill=(0, 0, 0, 150),
-    )
-
-    tx = max(10, (box_w - tw) // 2)
-    ty = max(8, (box_h - th) // 2)
-
-    for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-2, -2), (2, 2), (-2, 2), (2, -2)):
-        tdraw.text((tx + ox, ty + oy), rendered_text, font=font_bold, fill=(0, 0, 0, 240))
-
-    tdraw.text((tx, ty), rendered_text, font=font_bold, fill=color_rgba)
-
-    if emoji_font is not None:
-        emoji_chars = "".join(ch for ch in text if ord(ch) > 0x1F300)
-        if emoji_chars:
-            try:
-                ebbox = tdraw.textbbox((0, 0), emoji_chars, font=emoji_font)
-                ew = max(1, ebbox[2] - ebbox[0])
-                eh = max(1, ebbox[3] - ebbox[1])
-                tdraw.text(
-                    (max(6, box_w - ew - 12), max(2, (box_h - eh) // 2)),
-                    emoji_chars,
-                    font=emoji_font,
-                    embedded_color=True,
-                )
-            except Exception:
-                pass
-
-    paste_x = max(10, (WIDTH - box_w) // 2)
-    paste_y = max(10, (HEIGHT - box_h) // 2)
-    frame.paste(txt_canvas, (paste_x, paste_y), txt_canvas)
-
-
 def build_synced_reel(
     video_path: str,
     audio_path: str,
@@ -721,7 +683,7 @@ def build_synced_reel(
 ) -> tuple[bool, str]:
     """
     بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
-    صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی حساس به وکال/ریتم و متن بولد فارسی را روی بک‌گراند می‌گذارد
+    صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی حساس به وکال/ریتم و متن بولد فارسی واقعی را روی بک‌گراند می‌گذارد
     و واترماک ثابت را در وسط و زیر اکولایزر با فاصله کم قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
@@ -737,14 +699,17 @@ def build_synced_reel(
     duration = min(end_sec - start_sec, float(MAX_DURATION))
     _log(f"شروع ساخت ریلز به مدت {duration:.1f} ثانیه")
 
-    energies = extract_vocal_and_rhythm_envelope(audio_path, start_sec, duration, FPS)
-    cues = build_rhythmic_cues(lyrics_text, duration, FPS, energies)
-    _log(f"تعداد عبارات زمان‌بندی‌شده: {len(cues)}")
+    eq_energies, vocal_env = extract_vocal_and_rhythm_envelopes(audio_path, start_sec, duration, FPS)
+    cues = build_vocal_synced_cues(lyrics_text, duration, FPS, vocal_env)
+    _log(f"تعداد عبارات زمان‌بندی‌شده با وکال: {len(cues)}")
 
     ensure_default_logos()
+    font_path = get_bold_font_path()
     font_wm = load_bold_font(18)
     font_center = load_bold_font(44)
     emoji_font = load_emoji_font(44)
+
+    cue_overlays = pre_render_cue_overlays(cues, font_path, font_center, emoji_font)
 
     tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((20, 20)), WM_ICON_OPACITY)
     ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((20, 20)), WM_ICON_OPACITY)
@@ -845,29 +810,22 @@ def build_synced_reel(
                 break
 
             frame = Image.frombytes("RGB", (WIDTH, HEIGHT), raw_frame).convert("RGBA")
-            amp = energies[f_idx] if f_idx < len(energies) else 0.2
+            amp = eq_energies[f_idx] if f_idx < len(eq_energies) else 0.2
 
-            active_text = ""
-            cue_index = 0
-            for idx, (s_f, e_f, tok) in enumerate(cues):
+            active_cue_idx = -1
+            for idx, (s_f, e_f, _) in enumerate(cues):
                 if s_f <= f_idx <= e_f:
-                    active_text = tok
-                    cue_index = idx
+                    active_cue_idx = idx
                     break
 
-            text_rgba = TEXT_COLOR_PALETTE[cue_index % len(TEXT_COLOR_PALETTE)]
-            eq_rgba = EQ_COLOR_PALETTE[(cue_index + 1) % len(EQ_COLOR_PALETTE)]
-
+            eq_rgba = EQ_COLOR_PALETTE[(max(0, active_cue_idx) + 1) % len(EQ_COLOR_PALETTE)]
             draw_linear_equalizer(frame, f_idx, amp, eq_rgba, style=EQ_STYLE)
 
-            if active_text:
-                draw_centered_bold_text(
-                    frame=frame,
-                    text=active_text,
-                    font_bold=font_center,
-                    emoji_font=emoji_font,
-                    color_rgba=text_rgba,
-                )
+            if active_cue_idx >= 0 and active_cue_idx in cue_overlays:
+                overlay = cue_overlays[active_cue_idx]
+                px = max(10, (WIDTH - overlay.width) // 2)
+                py = max(10, (HEIGHT - overlay.height) // 2)
+                frame.paste(overlay, (px, py), overlay)
 
             frame.paste(wm_block, (fixed_wm_x, fixed_wm_y), wm_block)
 
@@ -937,7 +895,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با متن فارسی راست‌به‌چپ و متصل آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با رندر واقعی فارسی و سینک با وکال آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
