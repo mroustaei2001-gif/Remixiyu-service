@@ -17,7 +17,6 @@ AUTO_FONT_PATH = os.path.join(FONTS_DIR, "ReelBoldFont.ttf")
 TG_LOGO_PATH = os.path.join(BASE_DIR, "tg_logo.png")
 IG_LOGO_PATH = os.path.join(BASE_DIR, "ig_logo.png")
 
-# لینک‌های جایگزین برای دانلود خودکار فونت بولد سازگار با فارسی / استایل تمیز
 FONT_DOWNLOAD_URLS = [
     "https://github.com/google/fonts/raw/main/ofl/vazirmatn/Vazirmatn%5Bwght%5D.ttf",
     "https://github.com/google/fonts/raw/main/ofl/notosansarabic/NotoSansArabic%5Bwdth%2Cwght%5D.ttf",
@@ -30,7 +29,6 @@ HEIGHT = 1280
 FPS = 20
 WM_ALPHA = 102  # حدود ۴۰ درصد شفافیت (0.4 * 255)
 
-# ترکیب رنگ‌های بولد و خوانا برای متن وسط فیلم
 COLOR_PALETTE = [
     (255, 255, 255, 252),  # سفید خالص
     (255, 214, 10, 252),   # زرد طلایی
@@ -64,6 +62,14 @@ def ensure_default_logos():
         draw.ellipse((23, 23, 41, 41), outline=(255, 255, 255, 255), width=4)
         draw.ellipse((43, 17, 47, 21), fill=(255, 255, 255, 255))
         img.save(IG_LOGO_PATH)
+
+
+def apply_opacity(img: Image.Image, alpha_factor: float) -> Image.Image:
+    """شفافیت تصویر RGBA را بر اساس ضریب alpha_factor تنظیم می‌کند."""
+    rgba = img.convert("RGBA")
+    r, g, b, a = rgba.split()
+    a = a.point(lambda p: max(0, min(255, int(p * alpha_factor))))
+    return Image.merge("RGBA", (r, g, b, a))
 
 
 def download_font_if_needed() -> str | None:
@@ -311,7 +317,6 @@ def extract_beat_envelope(
             continue
         rms = math.sqrt(sum(s * s for s in chunk) / len(chunk)) / 32768.0
         raw_val = min(1.0, (rms * 4.2) ** 0.75)
-        # کمی نرم‌سازی تا حرکت اکولایزر طبیعی و چشم‌نواز باشد
         smoothed = smoothed * 0.45 + max(0.08, raw_val) * 0.55
         energies.append(smoothed)
 
@@ -343,7 +348,6 @@ def build_rhythmic_cues(
         return []
 
     total_frames = max(1, int(duration * fps))
-    # وزن هر عبارت بر اساس تعداد حروف و کلمات تا عبارات بلندتر زمان بیشتری داشته باشند
     weights = [max(2.0, len(re.sub(r"\s+", "", p)) * 0.85) for p in phrases]
     total_w = sum(weights)
 
@@ -355,7 +359,6 @@ def build_rhythmic_cues(
         if idx == len(phrases) - 1:
             end_f = total_frames - 1
         else:
-            # گذاشتن مکث کوتاه ۲ فریم بین عبارات تا از خواننده جلو نیفتد
             end_f = min(total_frames - 1, max(start_f + 2, start_f + span - 2))
 
         cues.append((start_f, end_f, phrase))
@@ -381,7 +384,6 @@ def draw_equalizer_on_background(
     bar_color = (r, g, b, 210)
 
     for i in range(bar_count):
-        # شکل گنبدی نرم برای میله‌های اکولایزر
         center_dist = abs(i - (bar_count - 1) / 2.0) / ((bar_count - 1) / 2.0)
         arch = max(0.35, 1.0 - 0.55 * (center_dist ** 1.4))
         wave = 0.55 + 0.45 * math.sin(f_idx * 0.35 + i * 0.55)
@@ -404,11 +406,9 @@ def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font
     icon_size = 20
     row_step = 22  # بدون فاصله عمودی بین دو خط
 
-    # خط اول: آیکون + t.me/remixiyu
     block.paste(tg_logo, (0, 1), tg_logo)
     draw.text((icon_size + 5, 2), TG_TEXT, font=font_wm, fill=(255, 255, 255, WM_ALPHA))
 
-    # خط دوم: آیکون + remixiyu دقیقاً زیر خط اول بدون فاصله
     block.paste(ig_logo, (0, row_step + 1), ig_logo)
     draw.text((icon_size + 5, row_step + 2), IG_TEXT, font=font_wm, fill=(255, 255, 255, WM_ALPHA))
 
@@ -445,7 +445,6 @@ def draw_centered_bold_text(
     tx = max(10, (box_w - tw) // 2)
     ty = max(8, (box_h - th) // 2)
 
-    # سایه/حاشیه بولد برای خوانایی بالا
     for ox, oy in ((-2, 0), (2, 0), (0, -2), (0, 2), (2, 2)):
         tdraw.text((tx + ox, ty + oy), text, font=font_bold, fill=(0, 0, 0, 235))
 
@@ -617,10 +616,8 @@ def build_synced_reel(
 
             accent_rgba = COLOR_PALETTE[cue_index % len(COLOR_PALETTE)]
 
-            # اکولایزر روی بک‌گراند ریلز
             draw_equalizer_on_background(frame, f_idx, amp, accent_rgba)
 
-            # متن بولد وسط فیلم با سرعت آرام و هماهنگ با خواننده
             if active_text:
                 draw_centered_bold_text(
                     frame=frame,
@@ -630,7 +627,6 @@ def build_synced_reel(
                     color_rgba=accent_rgba,
                 )
 
-            # واترماک ثابت در پایین صفحه (بدون حرکت، ۴۰٪ شفاف، زیر هم بدون فاصله)
             frame.paste(wm_block, (fixed_wm_x, fixed_wm_y), wm_block)
 
             try:
