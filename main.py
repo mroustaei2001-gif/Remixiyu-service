@@ -318,7 +318,7 @@ async def generate_ai_music_description(audio_file_path: str, track_name: str, a
                 mood = str(parsed.get("mood", "")).strip()
                 log(f"AI Vibe Analysis -> mood: {mood}, confidence: {confidence}, caption: {caption}")
 
-                if confidence != "low" and caption:
+                                if confidence != "low" and caption:
                     first_line = next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
                     if first_line:
                         RECENT_CAPTIONS.append(first_line)
