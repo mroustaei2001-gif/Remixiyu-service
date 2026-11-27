@@ -18,12 +18,28 @@ BOT_TOKEN = (os.environ.get("REEL_BOT_TOKEN") or os.environ.get("BOT_TOKEN") or 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_PATH = os.path.join(BASE_DIR, "reel_bot_session")
 BG_VIDEO_PATH = os.path.join(BASE_DIR, "bg.mp4")
+MANUAL_TEXT_PATH = os.path.join(BASE_DIR, "manual_lyrics.txt")
 
 client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
 
 
 def _log(msg: str):
     print(f"[REEL_BOT] {msg}", file=sys.stderr, flush=True)
+
+
+def _save_manual_text(text: str):
+    with open(MANUAL_TEXT_PATH, "w", encoding="utf-8") as f:
+        f.write(text.strip())
+
+
+def _load_manual_text() -> str:
+    if os.path.exists(MANUAL_TEXT_PATH):
+        try:
+            with open(MANUAL_TEXT_PATH, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            return ""
+    return ""
 
 
 def _is_audio_or_voice(msg) -> bool:
@@ -56,10 +72,29 @@ async def handle_start(event):
         "2️⃣ **ثبت بک‌گراند ریلز (ویدئو یا عکس خام بدون واترماک):**\n"
         "روی ویدئو یا عکس ریپلای کنید و بنویسید:\n"
         "`.setbg`\n\n"
-        "3️⃣ **ساخت ریلز ۶۰ ثانیه‌ای با اکولایزر و متن بولد:**\n"
+        "3️⃣ **ثبت متن دستی به‌صورت جداگانه:**\n"
+        "`.settext متن دستی با ایموجی`\n\n"
+        "4️⃣ **ساخت ریلز (تا ۶۰ ثانیه):**\n"
         "روی فایل موزیک ریپلای کنید و بنویسید:\n"
-        "`.reel 00:00 01:00 | متن تاییدشده با ایموجی`"
+        "`.reel 00:00 01:00` (از متن دستی ثبت‌شده استفاده می‌کند)\n"
+        "یا: `.reel 00:00 01:00 | متن لحظه‌ای`"
     )
+
+
+@client.on(events.NewMessage(pattern=r"^\.settext(?:\s+([\s\S]+))?$"))
+async def handle_settext(event):
+    manual_txt = (event.pattern_match.group(1) or "").strip()
+    if not manual_txt:
+        reply = await event.get_reply_message()
+        if reply and getattr(reply, "raw_text", ""):
+            manual_txt = reply.raw_text.strip()
+
+    if not manual_txt:
+        await event.reply("❌ متن را بعد از `.settext` بنویسید یا روی یک پیام متنی ریپلای کنید.")
+        return
+
+    _save_manual_text(manual_txt)
+    await event.reply("✅ متن دستی ثبت شد. حالا می‌توانید با `.reel 00:00 01:00` ریلز را بسازید.")
 
 
 @client.on(events.NewMessage(pattern=r"^\.setbg(?:\s|$)"))
@@ -123,14 +158,14 @@ async def handle_cut(event):
             caption = (
                 f"🎵 برش {dur:.0f} ثانیه‌ای آماده شد.\n"
                 f"✅ متن دریافت‌شده از سایت:\n{site_msg}\n\n"
-                f"پس از تایید، با `.reel {start_str} {end_str} | متن_تاییدشده` ریلز را بسازید."
+                f"متن را با `.settext متن` ثبت کنید و بعد `.reel {start_str} {end_str}` بزنید."
             )
         else:
             caption = (
                 f"🎵 برش {dur:.0f} ثانیه‌ای آماده شد.\n"
                 f"⚠️ تست خودکار سایت نتیجه نداد: {site_msg}\n"
-                f"لطفاً فایل را دستی در سایت تبدیل کنید و بعد با:\n"
-                f"`.reel {start_str} {end_str} | متن_تاییدشده`\n"
+                f"لطفاً فایل را دستی تبدیل کنید، متن را با `.settext متن` ثبت کنید و با:\n"
+                f"`.reel {start_str} {end_str}`\n"
                 f"ریلز را بسازید."
             )
 
@@ -138,13 +173,13 @@ async def handle_cut(event):
         await status.delete()
 
 
-@client.on(events.NewMessage(pattern=r"^\.reel(?:\s+(.+))?$", func=lambda e: bool(e.text)))
+@client.on(events.NewMessage(pattern=r"^\.reel(?:\s+([\s\S]+))?$", func=lambda e: bool(e.text)))
 async def handle_reel(event):
     reply = await event.get_reply_message()
     if not _is_audio_or_voice(reply):
         await event.reply(
             "❌ روی فایل موزیک ریپلای کنید و بنویسید:\n"
-            "`.reel 00:00 01:00 | متن تاییدشده با ایموجی`"
+            "`.reel 00:00 01:00` یا `.reel 00:00 01:00 | متن`"
         )
         return
 
@@ -154,18 +189,18 @@ async def handle_reel(event):
 
     raw_arg = (event.pattern_match.group(1) or "").strip()
     if "|" in raw_arg:
-        time_part, lyrics_text = raw_arg.split("|", 1)
-        lyrics_text = lyrics_text.strip()
+        time_part, inline_lyrics = raw_arg.split("|", 1)
+        lyrics_text = inline_lyrics.strip()
     else:
-        time_part, lyrics_text = raw_arg, ""
+        time_part, lyrics_text = raw_arg, _load_manual_text()
 
     time_tokens = time_part.strip().split()
     if len(time_tokens) < 2:
-        await event.reply("❌ زمان شروع و پایان را وارد کنید؛ مثال: `.reel 00:00 01:00 | متن`")
+        await event.reply("❌ زمان شروع و پایان را وارد کنید؛ مثال: `.reel 00:00 01:00`")
         return
 
     start_str, end_str = time_tokens[0], time_tokens[1]
-    status = await event.reply("🎬 در حال ساخت ریلز ۶۰ ثانیه‌ای با اکولایزر و متن بولد...")
+    status = await event.reply("🎬 در حال ساخت ریلز با اکولایزر خطی و متن بولد...")
     _log(f"درخواست ساخت ریلز دریافت شد: {start_str} تا {end_str}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
