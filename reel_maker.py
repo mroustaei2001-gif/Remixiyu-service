@@ -84,7 +84,7 @@ def build_reel_video(
 
     filters = [
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,setsar=1,eq=brightness=-0.10[v0]"
+        "crop=1080:1920,setsar=1,eq=brightness=-0.10,format=rgba[v0]"
     ]
     current_label = "v0"
     next_input_idx = 1
@@ -113,7 +113,7 @@ def build_reel_video(
     tg_comp_lbl = f"v_tg_{step_idx}"
     step_idx += 1
 
-    filters.append(f"[{tg_logo_idx}:v]scale=40:40[{tg_icon_lbl}]")
+    filters.append(f"[{tg_logo_idx}:v]scale=40:40,format=rgba[{tg_icon_lbl}]")
     filters.append(
         f"[{current_label}][{tg_icon_lbl}]overlay=x=305:y={tg_y}+4[{tg_comp_lbl}]"
     )
@@ -140,7 +140,7 @@ def build_reel_video(
     ig_comp_lbl = f"v_ig_{step_idx}"
     step_idx += 1
 
-    filters.append(f"[{ig_logo_idx}:v]scale=40:40[{ig_icon_lbl}]")
+    filters.append(f"[{ig_logo_idx}:v]scale=40:40,format=rgba[{ig_icon_lbl}]")
     filters.append(
         f"[{current_label}][{ig_icon_lbl}]overlay=x=345:y={ig_y}+4[{ig_comp_lbl}]"
     )
@@ -157,7 +157,7 @@ def build_reel_video(
     )
     current_label = ig_txt_lbl
 
-    # ایندکس واقعی فایل صوتی (بعد از پس‌زمینه و دو لوگو = 3)
+    # ایندکس واقعی فایل صوتی (بعد از پس‌زمینه و دو لوگو)
     audio_input_idx = next_input_idx
     filter_complex = ";".join(filters)
 
@@ -197,5 +197,11 @@ def build_reel_video(
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return True, f"ریلز {duration} ثانیه‌ای (1080x1920) با واترماک آماده شد."
     except subprocess.CalledProcessError as e:
-        err = e.stderr.decode("utf-8", errors="ignore")[-240:]
-        return False, f"خطا در ffmpeg: {err}"
+        raw_err = e.stderr.decode("utf-8", errors="ignore")
+        err_lines = [
+            line.strip()
+            for line in raw_err.splitlines()
+            if any(k in line.lower() for k in ("error", "invalid", "no such", "failed", "unable"))
+        ]
+        tail_err = "\n".join(err_lines[-6:]) if err_lines else raw_err[-1200:]
+        return False, f"خطا در ffmpeg:\n{tail_err[-900:]}"
