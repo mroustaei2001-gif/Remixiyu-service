@@ -601,17 +601,30 @@ def build_synced_reel(
                 except ValueError:
                     pass
 
-        if enc_proc.returncode != 0:
-            _log(f"خطای انکود ffmpeg با کد {enc_proc.returncode}: {enc_err[-400:]}")
-            if enc_proc.returncode == -9:
-                return False, "خطا در ffmpeg (کد -9): رم کانتینر در لحظه انکود پر شد."
-            return False, f"خطا در ffmpeg (کد {enc_proc.returncode}):\n{enc_err[-1000:]}"
+        try:
+            enc_proc.wait(timeout=15)
+        except Exception:
+            pass
 
-        if written_frames == 0 or not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            _log(f"فایل خروجی ساخته نشد. dec_err={dec_err[-300:]}")
+        rc = enc_proc.returncode
+        file_ready = (
+            written_frames > 0
+            and os.path.exists(output_path)
+            and os.path.getsize(output_path) > 0
+        )
+
+        if rc not in (0, None):
+            _log(f"خطای انکود ffmpeg با کد {rc}: {enc_err[-400:]}")
+            if rc == -9:
+                return False, "خطا در ffmpeg (کد -9): رم کانتینر در لحظه انکود پر شد."
+            if not file_ready:
+                return False, f"خطا در ffmpeg (کد {rc}):\n{enc_err[-1000:]}"
+
+        if not file_ready:
+            _log(f"فایل خروجی ساخته نشد (rc={rc}). dec_err={dec_err[-300:]}")
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
-        _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم).")
+        _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
         return True, f"ریلز {duration:.0f} ثانیه‌ای با کات دقیق ویدئو، حذف صدای قبلی، سینک ریتماتیک و واترماک ثابت پایین آماده شد."
 
     except Exception as e:
