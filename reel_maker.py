@@ -8,6 +8,16 @@ import tempfile
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
+try:
+    import arabic_reshaper  # type: ignore
+except Exception:
+    arabic_reshaper = None
+
+try:
+    from bidi.algorithm import get_display  # type: ignore
+except Exception:
+    get_display = None
+
 TG_TEXT = "t.me/remixiyu"
 IG_TEXT = "remixiyu"
 
@@ -39,6 +49,24 @@ COLOR_PALETTE = [
 
 def _log(msg: str):
     print(f"[REEL_MAKER] {msg}", file=sys.stderr, flush=True)
+
+
+def _shape_persian_text(text: str) -> str:
+    """در صورت وجود کتابخانه‌های reshaper و bidi، حروف فارسی را متصل و راست‌به‌چپ مرتب می‌کند."""
+    s = text.strip()
+    if not s:
+        return ""
+    has_persian = any("\u0600" <= ch <= "\u06FF" for ch in s)
+    if not has_persian:
+        return s
+    try:
+        if arabic_reshaper is not None:
+            s = arabic_reshaper.reshape(s)
+        if get_display is not None:
+            s = get_display(s)
+    except Exception:
+        pass
+    return s
 
 
 def ensure_default_logos():
@@ -262,7 +290,7 @@ def test_voicemaker_transcription(audio_path: str, timeout: int = 15) -> tuple[b
 def extract_beat_envelope(
     audio_path: str, start_sec: float, duration: float, fps: int
 ) -> list[float]:
-    """انرژی هر فریم از موزیک را استخراج می‌کند تا متن و اکولایزر با ریتم سینک شوند."""
+    """انرژی هر فریم از موزیک را با واکنش سریع‌تر استخراج می‌کند تا اکولایزر تیزتر حرکت کند."""
     total_frames = max(1, int(duration * fps))
     sample_rate = 4000
 
@@ -309,26 +337,35 @@ def extract_beat_envelope(
     samples_per_frame = max(1, count // total_frames)
 
     energies: list[float] = []
-    smoothed = 0.25
+    prev_val = 0.2
     for i in range(total_frames):
         chunk = samples[i * samples_per_frame : (i + 1) * samples_per_frame]
         if not chunk:
-            energies.append(smoothed)
+            energies.append(prev_val * 0.7)
             continue
         rms = math.sqrt(sum(s * s for s in chunk) / len(chunk)) / 32768.0
-        raw_val = min(1.0, (rms * 4.2) ** 0.75)
-        smoothed = smoothed * 0.45 + max(0.08, raw_val) * 0.55
-        energies.append(smoothed)
+        # واکنش تیزتر و سریع‌تر به اوج‌ها و افت‌های ضرباهنگ
+        sharp_val = min(1.0, (rms * 5.2) ** 0.85)
+        val = max(0.06, sharp_val * 0.8 + prev_val * 0.2)
+        prev_val = val
+        energies.append(val)
 
     return energies
+
+
+def _clean_phrase_text(raw: str) -> str:
+    """نقطه‌ها و نشانه‌های اضافی تبدیل‌صوت را تمیز می‌کند تا عبارت خوانا و روان بماند."""
+    cleaned = re.sub(r"[.،؛:!?]+", " ", raw)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 def build_rhythmic_cues(
     lyrics_text: str, duration: float, fps: int, energies: list[float]
 ) -> list[tuple[int, int, str]]:
     """
-    متن تاییدشده را به عبارات کوتاهِ طبیعی (۲ تا ۳ کلمه‌ای) تقسیم می‌کند تا سرعت نمایش
-    از خواننده جلو نزند و با ریتم موزیک همگام باشد.
+    متن را تمیز و به عبارات منسجم تقسیم می‌کند و با زمان‌بندی متناسب‌تر با خواننده
+    (بدون جلو زدن سریع و با مکث بین عبارات) روی بازه فریم‌ها می‌نشاند.
     """
     clean = lyrics_text.strip()
     if not clean:
@@ -337,32 +374,46 @@ def build_rhythmic_cues(
     raw_chunks = [part.strip() for part in re.split(r"\n+|\s*\|\s*", clean) if part.strip()]
     phrases: list[str] = []
     for ch in raw_chunks:
-        words = [w.strip() for w in ch.split() if w.strip()]
+        cleaned_ch = _clean_phrase_text(ch)
+        if not cleaned_ch:
+            continue
+        words = [w.strip() for w in cleaned_ch.split() if w.strip()]
         if len(words) <= 3:
-            phrases.append(ch)
+            phrases.append(cleaned_ch)
         else:
             for i in range(0, len(words), 3):
-                phrases.append(" ".join(words[i : i + 3]))
+                part_phrase = " ".join(words[i : i + 3]).strip()
+                if part_phrase:
+                    phrases.append(part_phrase)
 
     if not phrases:
         return []
 
     total_frames = max(1, int(duration * fps))
-    weights = [max(2.0, len(re.sub(r"\s+", "", p)) * 0.85) for p in phrases]
-    total_w = sum(weights)
+    # وزن هر عبارت بر اساس تعداد کلمات و حروف واقعی تا عبارات طولانی‌تر زمان کافی بگیرند
+    weights = []
+    for p in phrases:
+        word_cnt = max(1, len(p.split()))
+        char_cnt = len(re.sub(r"\s+", "", p))
+        weights.append(max(3.0, word_cnt * 2.2 + char_cnt * 0.45))
 
+    total_w = sum(weights)
     cues: list[tuple[int, int, str]] = []
-    cursor = 0
+    cursor = int(fps * 0.35)  # شروع کمی آرام‌تر تا از خواننده جلو نیفتد
+
     for idx, (phrase, w) in enumerate(zip(phrases, weights)):
-        span = max(int(fps * 0.9), int(round(total_frames * (w / total_w))))
+        if cursor >= total_frames - 1:
+            break
+        span = max(int(fps * 1.1), int(round((total_frames - cursor) * (w / total_w))))
         start_f = min(cursor, total_frames - 1)
         if idx == len(phrases) - 1:
             end_f = total_frames - 1
         else:
-            end_f = min(total_frames - 1, max(start_f + 2, start_f + span - 2))
+            # مکث طبیعی ۴ فریم بین عبارات برای هماهنگی بیشتر با خواننده
+            end_f = min(total_frames - 1, max(start_f + 4, start_f + span - 4))
 
         cues.append((start_f, end_f, phrase))
-        cursor = end_f + 3
+        cursor = end_f + 4
 
     return cues
 
@@ -370,30 +421,32 @@ def build_rhythmic_cues(
 def draw_equalizer_on_background(
     frame: Image.Image, f_idx: int, amp: float, accent_rgba: tuple[int, int, int, int]
 ):
-    """اکولایزر میله‌ای را مستقیماً روی بک‌گراند ریلز (در پایینِ وسط، بالای واترماک) رسم می‌کند."""
+    """اکولایزر تیز و پویاتر را مستقیماً روی بک‌گراند ریلز (در پایینِ وسط، بالای واترماک) رسم می‌کند."""
     draw = ImageDraw.Draw(frame)
-    bar_count = 28
-    bar_w = 10
-    gap = 6
+    bar_count = 36
+    bar_w = 7
+    gap = 5
     total_w = bar_count * bar_w + (bar_count - 1) * gap
     start_x = (WIDTH - total_w) // 2
-    base_y = HEIGHT - 155
-    max_bar_h = 72
+    base_y = HEIGHT - 152
+    max_bar_h = 84
 
     r, g, b, _ = accent_rgba
-    bar_color = (r, g, b, 210)
+    bar_color = (r, g, b, 225)
 
     for i in range(bar_count):
+        # اختلاف ارتفاع بیشتر بین میله‌های مجاور + فرکانس تیزتر
         center_dist = abs(i - (bar_count - 1) / 2.0) / ((bar_count - 1) / 2.0)
-        arch = max(0.35, 1.0 - 0.55 * (center_dist ** 1.4))
-        wave = 0.55 + 0.45 * math.sin(f_idx * 0.35 + i * 0.55)
-        h = max(8, int(max_bar_h * amp * arch * wave))
+        envelope = max(0.28, 1.0 - 0.65 * (center_dist ** 1.3))
+        sharp_wave = abs(math.sin(f_idx * 0.65 + i * 1.15)) ** 1.35
+        h = max(6, int(max_bar_h * amp * envelope * (0.25 + 0.75 * sharp_wave)))
 
         x0 = start_x + i * (bar_w + gap)
         y0 = base_y - h
         x1 = x0 + bar_w
         y1 = base_y
-        draw.rounded_rectangle((x0, y0, x1, y1), radius=5, fill=bar_color)
+        # گوشه‌های تیزتر با radius=2
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=2, fill=bar_color)
 
 
 def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font_wm) -> Image.Image:
@@ -422,15 +475,16 @@ def draw_centered_bold_text(
     emoji_font,
     color_rgba: tuple[int, int, int, int],
 ):
-    """متن بولد، رنگی و دارای ایموجی را با سرعت آرام و هماهنگ با خواننده در وسط ویدئو رسم می‌کند."""
+    """متن بولد، رنگی و دارای ایموجی را با شکل‌دهی فارسی و هماهنگی با خواننده در وسط ویدئو رسم می‌کند."""
+    rendered_text = _shape_persian_text(text)
     draw = ImageDraw.Draw(frame)
-    bbox = draw.textbbox((0, 0), text, font=font_bold)
+    bbox = draw.textbbox((0, 0), rendered_text, font=font_bold)
     tw = max(1, bbox[2] - bbox[0])
     th = max(1, bbox[3] - bbox[1])
 
-    pad_x = 26
+    pad_x = 28
     pad_y = 18
-    box_w = min(WIDTH - 36, tw + pad_x * 2)
+    box_w = min(WIDTH - 32, tw + pad_x * 2)
     box_h = th + pad_y * 2
 
     txt_canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
@@ -438,17 +492,18 @@ def draw_centered_bold_text(
 
     tdraw.rounded_rectangle(
         (2, 2, box_w - 2, box_h - 2),
-        radius=18,
-        fill=(0, 0, 0, 145),
+        radius=16,
+        fill=(0, 0, 0, 150),
     )
 
     tx = max(10, (box_w - tw) // 2)
     ty = max(8, (box_h - th) // 2)
 
-    for ox, oy in ((-2, 0), (2, 0), (0, -2), (0, 2), (2, 2)):
-        tdraw.text((tx + ox, ty + oy), text, font=font_bold, fill=(0, 0, 0, 235))
+    # حاشیه/سایه ضخیم‌تر برای ضخامت و خوانایی بیشتر فونت بولد
+    for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-2, -2), (2, 2), (-2, 2), (2, -2)):
+        tdraw.text((tx + ox, ty + oy), rendered_text, font=font_bold, fill=(0, 0, 0, 240))
 
-    tdraw.text((tx, ty), text, font=font_bold, fill=color_rgba)
+    tdraw.text((tx, ty), rendered_text, font=font_bold, fill=color_rgba)
 
     if emoji_font is not None:
         emoji_chars = "".join(ch for ch in text if ord(ch) > 0x1F300)
@@ -481,7 +536,7 @@ def build_synced_reel(
 ) -> tuple[bool, str]:
     """
     بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
-    صدای اصلی ویدئو را قطع می‌کند، اکولایزر و متن بولد را روی بک‌گراند می‌گذارد
+    صدای اصلی ویدئو را قطع می‌کند، اکولایزر تیزتر و متن بولد هماهنگ با خواننده را روی بک‌گراند می‌گذارد
     و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را در پایین صفحه قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
@@ -495,7 +550,7 @@ def build_synced_reel(
         return False, "زمان پایان باید بزرگ‌تر از زمان شروع باشد."
 
     duration = min(end_sec - start_sec, float(MAX_DURATION))
-    _log(f"شروع ساخت ریلز ۶۰ ثانیه‌ای/برش‌خورده به مدت {duration:.1f} ثانیه")
+    _log(f"شروع ساخت ریلز به مدت {duration:.1f} ثانیه")
 
     energies = extract_beat_envelope(audio_path, start_sec, duration, FPS)
     cues = build_rhythmic_cues(lyrics_text, duration, FPS, energies)
@@ -695,7 +750,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با بک‌گراند ویدئو/عکس، اکولایزر، فونت بولد و واترماک ثابت پایین آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر تیزتر، متن بولد هماهنگ با خواننده و واترماک ثابت پایین آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
