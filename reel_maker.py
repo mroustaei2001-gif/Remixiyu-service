@@ -410,9 +410,9 @@ def build_synced_reel(
     lyrics_text: str,
 ) -> tuple[bool, str]:
     """
-    ویدئوی پس‌زمینه را دقیقاً هم‌اندازه تایم موزیک کات می‌زند (اگر طولانی‌تر باشد برش می‌دهد
-    و اگر کوتاه‌تر باشد تا پایان تایم ادامه می‌دهد)، متن ریتماتیک را در وسط می‌گذارد
-    و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را در پایین صفحه قرار می‌دهد.
+    صدای اصلی ویدئوی پس‌زمینه را قطع می‌کند، ویدئو را دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
+    متن ریتماتیک را در وسط می‌گذارد و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را
+    در پایین صفحه قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -442,12 +442,10 @@ def build_synced_reel(
     wm_block = make_fixed_bottom_watermark(tg_logo, ig_logo, font_wm)
     wm_w, wm_h = wm_block.size
 
-    # ثابت در پایین صفحه و در عرض وسط
     fixed_wm_x = (WIDTH - wm_w) // 2
     fixed_wm_y = HEIGHT - wm_h - 48
 
     is_video = video_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
-    # اگر ویدئو طولانی‌تر از duration باشد دقیقاً در duration کات می‌خورد؛ اگر کوتاه‌تر باشد حلقه می‌شود
     vid_input = ["-stream_loop", "-1", "-i", video_path] if is_video else ["-loop", "1", "-i", video_path]
 
     dec_cmd = [
@@ -456,6 +454,7 @@ def build_synced_reel(
         "-threads",
         "1",
         *vid_input,
+        "-an",
         "-t",
         str(duration),
         "-vf",
@@ -530,6 +529,10 @@ def build_synced_reel(
                 _log(f"اتمام یا توقف جریان فریم ورودی در فریم {f_idx}")
                 break
 
+            if enc_proc.poll() is not None or not enc_proc.stdin or enc_proc.stdin.closed:
+                _log(f"فرآیند انکود ffmpeg در فریم {f_idx} زودتر بسته شد.")
+                break
+
             frame = Image.frombytes("RGB", (WIDTH, HEIGHT), raw_frame).convert("RGBA")
             amp = energies[f_idx] if f_idx < len(energies) else 0.2
 
@@ -556,25 +559,47 @@ def build_synced_reel(
             # واترماک ثابت در پایین صفحه (بدون حرکت، ۴۰٪ شفاف، زیر هم بدون فاصله)
             frame.paste(wm_block, (fixed_wm_x, fixed_wm_y), wm_block)
 
-            if enc_proc.stdin:
+            try:
                 enc_proc.stdin.write(frame.convert("RGB").tobytes())
                 written_frames += 1
+            except (BrokenPipeError, ValueError) as write_err:
+                _log(f"توقف نوشتن روی stdin انکود در فریم {f_idx}: {write_err}")
+                break
 
             if written_frames % 60 == 0 or written_frames == total_frames:
                 _log(f"پیشرفت فریم‌ها: {written_frames}/{total_frames}")
 
-        if dec_proc.stdout:
+        if dec_proc.stdout and not dec_proc.stdout.closed:
             dec_proc.stdout.close()
-        if enc_proc.stdin:
-            enc_proc.stdin.close()
+        if enc_proc.stdin and not enc_proc.stdin.closed:
+            try:
+                enc_proc.stdin.close()
+            except ValueError:
+                pass
 
-        dec_err = dec_proc.stderr.read().decode("utf-8", errors="ignore").strip() if dec_proc.stderr else ""
+        dec_err = ""
         if dec_proc.stderr:
-            dec_proc.stderr.close()
+            try:
+                dec_err = dec_proc.stderr.read().decode("utf-8", errors="ignore").strip()
+                dec_proc.stderr.close()
+            except ValueError:
+                pass
 
-        dec_proc.wait(timeout=30)
-        _, enc_err_bytes = enc_proc.communicate(timeout=60)
-        enc_err = (enc_err_bytes or b"").decode("utf-8", errors="ignore").strip()
+        try:
+            dec_proc.wait(timeout=30)
+        except Exception:
+            pass
+
+        enc_err = ""
+        try:
+            _, enc_err_bytes = enc_proc.communicate(timeout=60)
+            enc_err = (enc_err_bytes or b"").decode("utf-8", errors="ignore").strip()
+        except ValueError:
+            if enc_proc.stderr:
+                try:
+                    enc_err = enc_proc.stderr.read().decode("utf-8", errors="ignore").strip()
+                except ValueError:
+                    pass
 
         if enc_proc.returncode != 0:
             _log(f"خطای انکود ffmpeg با کد {enc_proc.returncode}: {enc_err[-400:]}")
@@ -587,7 +612,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با کات دقیق ویدئو، سینک ریتماتیک و واترماک ثابت پایین آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با کات دقیق ویدئو، حذف صدای قبلی، سینک ریتماتیک و واترماک ثابت پایین آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
