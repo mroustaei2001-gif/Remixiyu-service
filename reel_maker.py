@@ -12,8 +12,17 @@ TG_TEXT = "t.me/remixiyu"
 IG_TEXT = "remixiyu"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONTS_DIR = os.path.join(BASE_DIR, "fonts")
+AUTO_FONT_PATH = os.path.join(FONTS_DIR, "ReelBoldFont.ttf")
 TG_LOGO_PATH = os.path.join(BASE_DIR, "tg_logo.png")
 IG_LOGO_PATH = os.path.join(BASE_DIR, "ig_logo.png")
+
+# لینک‌های جایگزین برای دانلود خودکار فونت بولد سازگار با فارسی / استایل تمیز
+FONT_DOWNLOAD_URLS = [
+    "https://github.com/google/fonts/raw/main/ofl/vazirmatn/Vazirmatn%5Bwght%5D.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/notosansarabic/NotoSansArabic%5Bwdth%2Cwght%5D.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf",
+]
 
 MAX_DURATION = 60
 WIDTH = 720
@@ -21,12 +30,12 @@ HEIGHT = 1280
 FPS = 20
 WM_ALPHA = 102  # حدود ۴۰ درصد شفافیت (0.4 * 255)
 
-# ترکیب رنگ‌های بولد و پرانرژی برای متن وسط فیلم
+# ترکیب رنگ‌های بولد و خوانا برای متن وسط فیلم
 COLOR_PALETTE = [
-    (255, 255, 255, 250),  # سفید درخشان
-    (255, 214, 10, 250),   # زرد طلایی
-    (120, 220, 255, 250),  # آبی یخی
-    (255, 120, 180, 250),  # صورتی نئونی
+    (255, 255, 255, 252),  # سفید خالص
+    (255, 214, 10, 252),   # زرد طلایی
+    (120, 220, 255, 252),  # آبی روشن
+    (255, 130, 185, 252),  # صورتی ملایم
 ]
 
 
@@ -57,25 +66,58 @@ def ensure_default_logos():
         img.save(IG_LOGO_PATH)
 
 
-def apply_opacity(img: Image.Image, alpha_factor: float) -> Image.Image:
-    rgba = img.convert("RGBA")
-    r, g, b, a = rgba.split()
-    a = a.point(lambda p: int(p * alpha_factor))
-    return Image.merge("RGBA", (r, g, b, a))
+def download_font_if_needed() -> str | None:
+    """در صورت نبود فونت بولد روی سیستم، فونت را به صورت خودکار دانلود می‌کند."""
+    if os.path.exists(AUTO_FONT_PATH) and os.path.getsize(AUTO_FONT_PATH) > 10000:
+        return AUTO_FONT_PATH
+
+    os.makedirs(FONTS_DIR, exist_ok=True)
+    for url in FONT_DOWNLOAD_URLS:
+        try:
+            _log(f"در حال دانلود فونت بولد: {url}")
+            resp = requests.get(url, timeout=20)
+            if resp.status_code == 200 and resp.content and len(resp.content) > 10000:
+                tmp_font = AUTO_FONT_PATH + ".tmp"
+                with open(tmp_font, "wb") as f:
+                    f.write(resp.content)
+                os.replace(tmp_font, AUTO_FONT_PATH)
+                _log("فونت بولد با موفقیت دانلود و ذخیره شد.")
+                return AUTO_FONT_PATH
+        except Exception as e:
+            _log(f"خطا در دانلود فونت از {url}: {e}")
+
+    return None
+
+
+def _apply_font_variation_bold(font, weight: int = 800):
+    """اگر فونت متغیر (Variable) باشد، وزن را روی Bold/ExtraBold تنظیم می‌کند."""
+    try:
+        if hasattr(font, "set_variation_by_axes"):
+            font.set_variation_by_axes([weight])
+    except Exception:
+        try:
+            if hasattr(font, "set_variation_by_name"):
+                font.set_variation_by_name("Bold")
+        except Exception:
+            pass
+    return font
 
 
 def load_bold_font(size: int):
+    downloaded = download_font_if_needed()
     candidates = [
+        downloaded,
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
         "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
-        if os.path.exists(path):
+        if path and os.path.exists(path):
             try:
-                return ImageFont.truetype(path, size=size)
+                f = ImageFont.truetype(path, size=size)
+                return _apply_font_variation_bold(f, weight=800)
             except Exception:
                 pass
     return ImageFont.load_default()
@@ -214,7 +256,7 @@ def test_voicemaker_transcription(audio_path: str, timeout: int = 15) -> tuple[b
 def extract_beat_envelope(
     audio_path: str, start_sec: float, duration: float, fps: int
 ) -> list[float]:
-    """انرژی هر فریم از موزیک را استخراج می‌کند تا متن‌ها با ریتم/ضرباهنگ سینک شوند."""
+    """انرژی هر فریم از موزیک را استخراج می‌کند تا متن و اکولایزر با ریتم سینک شوند."""
     total_frames = max(1, int(duration * fps))
     sample_rate = 4000
 
@@ -261,14 +303,17 @@ def extract_beat_envelope(
     samples_per_frame = max(1, count // total_frames)
 
     energies: list[float] = []
+    smoothed = 0.25
     for i in range(total_frames):
         chunk = samples[i * samples_per_frame : (i + 1) * samples_per_frame]
         if not chunk:
-            energies.append(0.1)
+            energies.append(smoothed)
             continue
         rms = math.sqrt(sum(s * s for s in chunk) / len(chunk)) / 32768.0
-        val = min(1.0, (rms * 4.5) ** 0.72)
-        energies.append(max(0.08, val))
+        raw_val = min(1.0, (rms * 4.2) ** 0.75)
+        # کمی نرم‌سازی تا حرکت اکولایزر طبیعی و چشم‌نواز باشد
+        smoothed = smoothed * 0.45 + max(0.08, raw_val) * 0.55
+        energies.append(smoothed)
 
     return energies
 
@@ -277,46 +322,76 @@ def build_rhythmic_cues(
     lyrics_text: str, duration: float, fps: int, energies: list[float]
 ) -> list[tuple[int, int, str]]:
     """
-    متن تاییدشده را به کلمات/عبارات تقسیم کرده و بر اساس ریتم/انرژی موزیک به بازه فریم‌ها نگاشت می‌کند.
+    متن تاییدشده را به عبارات کوتاهِ طبیعی (۲ تا ۳ کلمه‌ای) تقسیم می‌کند تا سرعت نمایش
+    از خواننده جلو نزند و با ریتم موزیک همگام باشد.
     """
     clean = lyrics_text.strip()
     if not clean:
         return []
 
-    chunks = [part.strip() for part in re.split(r"\n+|\s*\|\s*", clean) if part.strip()]
-    tokens: list[str] = []
-    for ch in chunks:
+    raw_chunks = [part.strip() for part in re.split(r"\n+|\s*\|\s*", clean) if part.strip()]
+    phrases: list[str] = []
+    for ch in raw_chunks:
         words = [w.strip() for w in ch.split() if w.strip()]
-        if len(words) <= 2:
-            tokens.append(ch)
+        if len(words) <= 3:
+            phrases.append(ch)
         else:
-            tokens.extend(words)
+            for i in range(0, len(words), 3):
+                phrases.append(" ".join(words[i : i + 3]))
 
-    if not tokens:
+    if not phrases:
         return []
 
     total_frames = max(1, int(duration * fps))
-    base_weights = [max(1.0, len(re.sub(r"\s+", "", t)) * 0.6) for t in tokens]
-    total_w = sum(base_weights)
+    # وزن هر عبارت بر اساس تعداد حروف و کلمات تا عبارات بلندتر زمان بیشتری داشته باشند
+    weights = [max(2.0, len(re.sub(r"\s+", "", p)) * 0.85) for p in phrases]
+    total_w = sum(weights)
 
     cues: list[tuple[int, int, str]] = []
-    frame_cursor = 0
-    for idx, (tok, w) in enumerate(zip(tokens, base_weights)):
-        span = max(1, int(round(total_frames * (w / total_w))))
-        start_f = min(frame_cursor, total_frames - 1)
-        if idx == len(tokens) - 1:
+    cursor = 0
+    for idx, (phrase, w) in enumerate(zip(phrases, weights)):
+        span = max(int(fps * 0.9), int(round(total_frames * (w / total_w))))
+        start_f = min(cursor, total_frames - 1)
+        if idx == len(phrases) - 1:
             end_f = total_frames - 1
         else:
-            end_f = min(total_frames - 1, max(start_f, start_f + span - 1))
+            # گذاشتن مکث کوتاه ۲ فریم بین عبارات تا از خواننده جلو نیفتد
+            end_f = min(total_frames - 1, max(start_f + 2, start_f + span - 2))
 
-        peak_window = energies[max(0, start_f - 2) : min(total_frames, start_f + 3)]
-        if peak_window and max(peak_window) > 0.65 and start_f > 0:
-            start_f = max(0, start_f - 1)
-
-        cues.append((start_f, end_f, tok))
-        frame_cursor = end_f + 1
+        cues.append((start_f, end_f, phrase))
+        cursor = end_f + 3
 
     return cues
+
+
+def draw_equalizer_on_background(
+    frame: Image.Image, f_idx: int, amp: float, accent_rgba: tuple[int, int, int, int]
+):
+    """اکولایزر میله‌ای را مستقیماً روی بک‌گراند ریلز (در پایینِ وسط، بالای واترماک) رسم می‌کند."""
+    draw = ImageDraw.Draw(frame)
+    bar_count = 28
+    bar_w = 10
+    gap = 6
+    total_w = bar_count * bar_w + (bar_count - 1) * gap
+    start_x = (WIDTH - total_w) // 2
+    base_y = HEIGHT - 155
+    max_bar_h = 72
+
+    r, g, b, _ = accent_rgba
+    bar_color = (r, g, b, 210)
+
+    for i in range(bar_count):
+        # شکل گنبدی نرم برای میله‌های اکولایزر
+        center_dist = abs(i - (bar_count - 1) / 2.0) / ((bar_count - 1) / 2.0)
+        arch = max(0.35, 1.0 - 0.55 * (center_dist ** 1.4))
+        wave = 0.55 + 0.45 * math.sin(f_idx * 0.35 + i * 0.55)
+        h = max(8, int(max_bar_h * amp * arch * wave))
+
+        x0 = start_x + i * (bar_w + gap)
+        y0 = base_y - h
+        x1 = x0 + bar_w
+        y1 = base_y
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=5, fill=bar_color)
 
 
 def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font_wm) -> Image.Image:
@@ -346,17 +421,16 @@ def draw_centered_bold_text(
     font_bold,
     emoji_font,
     color_rgba: tuple[int, int, int, int],
-    pulse_scale: float = 1.0,
 ):
-    """متن بولد، رنگی و دارای ایموجی را دقیقاً در وسط ویدئو رسم می‌کند."""
+    """متن بولد، رنگی و دارای ایموجی را با سرعت آرام و هماهنگ با خواننده در وسط ویدئو رسم می‌کند."""
     draw = ImageDraw.Draw(frame)
     bbox = draw.textbbox((0, 0), text, font=font_bold)
     tw = max(1, bbox[2] - bbox[0])
     th = max(1, bbox[3] - bbox[1])
 
-    pad_x = 24
-    pad_y = 16
-    box_w = tw + pad_x * 2
+    pad_x = 26
+    pad_y = 18
+    box_w = min(WIDTH - 36, tw + pad_x * 2)
     box_h = th + pad_y * 2
 
     txt_canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
@@ -364,14 +438,16 @@ def draw_centered_bold_text(
 
     tdraw.rounded_rectangle(
         (2, 2, box_w - 2, box_h - 2),
-        radius=16,
-        fill=(0, 0, 0, 135),
+        radius=18,
+        fill=(0, 0, 0, 145),
     )
 
-    tx = pad_x
-    ty = pad_y
+    tx = max(10, (box_w - tw) // 2)
+    ty = max(8, (box_h - th) // 2)
+
+    # سایه/حاشیه بولد برای خوانایی بالا
     for ox, oy in ((-2, 0), (2, 0), (0, -2), (0, 2), (2, 2)):
-        tdraw.text((tx + ox, ty + oy), text, font=font_bold, fill=(0, 0, 0, 220))
+        tdraw.text((tx + ox, ty + oy), text, font=font_bold, fill=(0, 0, 0, 235))
 
     tdraw.text((tx, ty), text, font=font_bold, fill=color_rgba)
 
@@ -383,7 +459,7 @@ def draw_centered_bold_text(
                 ew = max(1, ebbox[2] - ebbox[0])
                 eh = max(1, ebbox[3] - ebbox[1])
                 tdraw.text(
-                    (box_w - ew - 10, max(2, (box_h - eh) // 2)),
+                    (max(6, box_w - ew - 12), max(2, (box_h - eh) // 2)),
                     emoji_chars,
                     font=emoji_font,
                     embedded_color=True,
@@ -391,13 +467,8 @@ def draw_centered_bold_text(
             except Exception:
                 pass
 
-    scaled_w = max(1, int(box_w * pulse_scale))
-    scaled_h = max(1, int(box_h * pulse_scale))
-    if (scaled_w, scaled_h) != (box_w, box_h):
-        txt_canvas = txt_canvas.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR)
-
-    paste_x = max(10, (WIDTH - scaled_w) // 2)
-    paste_y = max(10, (HEIGHT - scaled_h) // 2)
+    paste_x = max(10, (WIDTH - box_w) // 2)
+    paste_y = max(10, (HEIGHT - box_h) // 2)
     frame.paste(txt_canvas, (paste_x, paste_y), txt_canvas)
 
 
@@ -410,9 +481,9 @@ def build_synced_reel(
     lyrics_text: str,
 ) -> tuple[bool, str]:
     """
-    صدای اصلی ویدئوی پس‌زمینه را قطع می‌کند، ویدئو را دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
-    متن ریتماتیک را در وسط می‌گذارد و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را
-    در پایین صفحه قرار می‌دهد.
+    بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
+    صدای اصلی ویدئو را قطع می‌کند، اکولایزر و متن بولد را روی بک‌گراند می‌گذارد
+    و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را در پایین صفحه قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -425,17 +496,17 @@ def build_synced_reel(
         return False, "زمان پایان باید بزرگ‌تر از زمان شروع باشد."
 
     duration = min(end_sec - start_sec, float(MAX_DURATION))
-    _log(f"شروع ساخت ریلز به مدت {duration:.1f} ثانیه ({start_sec}s تا {start_sec + duration}s)")
+    _log(f"شروع ساخت ریلز ۶۰ ثانیه‌ای/برش‌خورده به مدت {duration:.1f} ثانیه")
 
     energies = extract_beat_envelope(audio_path, start_sec, duration, FPS)
     cues = build_rhythmic_cues(lyrics_text, duration, FPS, energies)
-    _log(f"تعداد بازه‌های ریتمیک متن: {len(cues)}")
+    _log(f"تعداد عبارات زمان‌بندی‌شده: {len(cues)}")
 
     ensure_default_logos()
     opacity = WM_ALPHA / 255.0
     font_wm = load_bold_font(18)
-    font_center = load_bold_font(42)
-    emoji_font = load_emoji_font(42)
+    font_center = load_bold_font(44)
+    emoji_font = load_emoji_font(44)
 
     tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((20, 20)), opacity)
     ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((20, 20)), opacity)
@@ -544,16 +615,19 @@ def build_synced_reel(
                     cue_index = idx
                     break
 
+            accent_rgba = COLOR_PALETTE[cue_index % len(COLOR_PALETTE)]
+
+            # اکولایزر روی بک‌گراند ریلز
+            draw_equalizer_on_background(frame, f_idx, amp, accent_rgba)
+
+            # متن بولد وسط فیلم با سرعت آرام و هماهنگ با خواننده
             if active_text:
-                color_rgba = COLOR_PALETTE[cue_index % len(COLOR_PALETTE)]
-                pulse_scale = 1.0 + min(0.12, amp * 0.12)
                 draw_centered_bold_text(
                     frame=frame,
                     text=active_text,
                     font_bold=font_center,
                     emoji_font=emoji_font,
-                    color_rgba=color_rgba,
-                    pulse_scale=pulse_scale,
+                    color_rgba=accent_rgba,
                 )
 
             # واترماک ثابت در پایین صفحه (بدون حرکت، ۴۰٪ شفاف، زیر هم بدون فاصله)
@@ -625,7 +699,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با کات دقیق ویدئو، حذف صدای قبلی، سینک ریتماتیک و واترماک ثابت پایین آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با بک‌گراند ویدئو/عکس، اکولایزر، فونت بولد و واترماک ثابت پایین آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
