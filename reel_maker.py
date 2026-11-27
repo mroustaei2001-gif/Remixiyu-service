@@ -37,10 +37,10 @@ MAX_DURATION = 60
 WIDTH = 720
 HEIGHT = 1280
 FPS = 20
-WM_ALPHA = 102  # حدود ۴۰ درصد شفافیت (0.4 * 255)
-EQ_STYLE = "segmented_linear"  # گزینه‌ها: "segmented_linear" یا "dual_linear"
+WM_TEXT_ALPHA = 102      # حدود ۴۰ درصد شفافیت برای متن واترماک
+WM_ICON_OPACITY = 0.82   # وضوح بیشتر آیکون‌های تلگرام و اینستاگرام
+EQ_STYLE = "segmented_linear"
 
-# پالت رنگ متن وسط
 TEXT_COLOR_PALETTE = [
     (255, 255, 255, 252),  # سفید خالص
     (255, 214, 10, 252),   # زرد طلایی
@@ -48,7 +48,6 @@ TEXT_COLOR_PALETTE = [
     (255, 130, 185, 252),  # صورتی ملایم
 ]
 
-# پالت رنگ جدید اکولایزر خطی
 EQ_COLOR_PALETTE = [
     (0, 245, 212, 235),    # فیروزه‌ای نئونی
     (185, 110, 255, 235),  # بنفش یاسی پرانرژی
@@ -63,6 +62,50 @@ if arabic_reshaper is not None:
     except Exception:
         _FA_RESHAPER = None
 
+# جدول فرم‌های چهارگانه حروف فارسی: (جدا، پایانی، آغازین، میانی)
+_PERSIAN_GLYPH_FORMS: dict[str, tuple[str, str, str, str]] = {
+    "آ": ("\uFE81", "\uFE82", "\uFE81", "\uFE82"),
+    "ا": ("\uFE8D", "\uFE8E", "\uFE8D", "\uFE8E"),
+    "أ": ("\uFE83", "\uFE84", "\uFE83", "\uFE84"),
+    "إ": ("\uFE87", "\uFE88", "\uFE87", "\uFE88"),
+    "ئ": ("\uFE89", "\uFE8A", "\uFE8B", "\uFE8C"),
+    "ب": ("\uFE8F", "\uFE90", "\uFE91", "\uFE92"),
+    "پ": ("\uFB56", "\uFB57", "\uFB58", "\uFB59"),
+    "ت": ("\uFE95", "\uFE96", "\uFE97", "\uFE98"),
+    "ث": ("\uFE99", "\uFE9A", "\uFE9B", "\uFE9C"),
+    "ج": ("\uFE9D", "\uFE9E", "\uFE9F", "\uFEA0"),
+    "چ": ("\uFB7A", "\uFB7B", "\uFB7C", "\uFB7D"),
+    "ح": ("\uFEA1", "\uFEA2", "\uFEA3", "\uFEA4"),
+    "خ": ("\uFEA5", "\uFEA6", "\uFEA7", "\uFEA8"),
+    "د": ("\uFEA9", "\uFEAA", "\uFEA9", "\uFEAA"),
+    "ذ": ("\uFEAB", "\uFEAC", "\uFEAB", "\uFEAC"),
+    "ر": ("\uFEAD", "\uFEAE", "\uFEAD", "\uFEAE"),
+    "ز": ("\uFEAF", "\uFEB0", "\uFEAF", "\uFEB0"),
+    "ژ": ("\uFB8A", "\uFB8B", "\uFB8A", "\uFB8B"),
+    "س": ("\uFEB1", "\uFEB2", "\uFEB3", "\uFEB4"),
+    "ش": ("\uFEB5", "\uFEB6", "\uFEB7", "\uFEB8"),
+    "ص": ("\uFEB9", "\uFEBA", "\uFEBB", "\uFEBC"),
+    "ض": ("\uFEBD", "\uFEBE", "\uFEBF", "\uFEC0"),
+    "ط": ("\uFEC1", "\uFEC2", "\uFEC3", "\uFEC4"),
+    "ظ": ("\uFEC5", "\uFEC6", "\uFEC7", "\uFEC8"),
+    "ع": ("\uFEC9", "\uFECA", "\uFECB", "\uFECC"),
+    "غ": ("\uFECD", "\uFECE", "\uFECF", "\uFED0"),
+    "ف": ("\uFED1", "\uFED2", "\uFED3", "\uFED4"),
+    "ق": ("\uFED5", "\uFED6", "\uFED7", "\uFED8"),
+    "ک": ("\uFB8E", "\uFB8F", "\uFB90", "\uFB91"),
+    "گ": ("\uFB92", "\uFB93", "\uFB94", "\uFB95"),
+    "ل": ("\uFEDD", "\uFEDE", "\uFEDF", "\uFEE0"),
+    "م": ("\uFEE1", "\uFEE2", "\uFEE3", "\uFEE4"),
+    "ن": ("\uFEE5", "\uFEE6", "\uFEE7", "\uFEE8"),
+    "و": ("\uFEED", "\uFEEE", "\uFEED", "\uFEEE"),
+    "ؤ": ("\uFE85", "\uFE86", "\uFE85", "\uFE86"),
+    "ه": ("\uFEE9", "\uFEEA", "\uFEEB", "\uFEEC"),
+    "ی": ("\uFBFC", "\uFBFD", "\uFBFE", "\uFBFF"),
+}
+
+# حروفی که فقط از راست می‌چسبند و به حرف بعدی وصل نمی‌شوند
+_RIGHT_JOIN_ONLY = {"آ", "ا", "أ", "إ", "د", "ذ", "ر", "ز", "ژ", "و", "ؤ"}
+
 
 def _log(msg: str):
     print(f"[REEL_MAKER] {msg}", file=sys.stderr, flush=True)
@@ -76,6 +119,77 @@ def _normalize_persian_chars(text: str) -> str:
     return s
 
 
+def _builtin_persian_reshape_and_bidi(text: str) -> str:
+    """موتور داخلی اتصال حروف فارسی و چینش راست‌به‌چپ برای اجرا بدون نیاز به کتابخانه خارجی."""
+    # ترکیب «ل» + «ا» / «آ» به «لا» / «لآ»
+    normalized = (
+        text.replace("لآ", "\uFEF5")
+        .replace("لأ", "\uFEF7")
+        .replace("لإ", "\uFEF9")
+        .replace("لا", "\uFEFB")
+    )
+
+    tokens = re.findall(r"\S+|\s+", normalized)
+    shaped_tokens: list[str] = []
+
+    for tok in tokens:
+        if tok.isspace():
+            shaped_tokens.append(tok)
+            continue
+
+        has_fa = any(ch in _PERSIAN_GLYPH_FORMS or ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB") for ch in tok)
+        if not has_fa:
+            shaped_tokens.append(tok)
+            continue
+
+        chars = list(tok)
+        out_chars: list[str] = []
+        n = len(chars)
+        for idx, ch in enumerate(chars):
+            if ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB"):
+                prev_ch = chars[idx - 1] if idx > 0 else ""
+                can_join_prev = (
+                    prev_ch in _PERSIAN_GLYPH_FORMS and prev_ch not in _RIGHT_JOIN_ONLY
+                )
+                # فرم پایانی لا با افزایش کد یونیک به اندازه ۱ به دست می‌آید
+                out_chars.append(chr(ord(ch) + 1) if can_join_prev else ch)
+                continue
+
+            if ch not in _PERSIAN_GLYPH_FORMS:
+                out_chars.append(ch)
+                continue
+
+            prev_ch = chars[idx - 1] if idx > 0 else ""
+            next_ch = chars[idx + 1] if idx + 1 < n else ""
+
+            can_join_prev = (
+                prev_ch in _PERSIAN_GLYPH_FORMS and prev_ch not in _RIGHT_JOIN_ONLY
+            )
+            can_join_next = (
+                ch not in _RIGHT_JOIN_ONLY
+                and (
+                    next_ch in _PERSIAN_GLYPH_FORMS
+                    or next_ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB")
+                )
+            )
+
+            isolated, final, initial, medial = _PERSIAN_GLYPH_FORMS[ch]
+            if can_join_prev and can_join_next:
+                out_chars.append(medial)
+            elif can_join_prev:
+                out_chars.append(final)
+            elif can_join_next:
+                out_chars.append(initial)
+            else:
+                out_chars.append(isolated)
+
+        # معکوس کردن ترتیب کاراکترهای فارسی برای نمایش راست‌به‌چپ
+        shaped_tokens.append("".join(reversed(out_chars)))
+
+    # معکوس کردن ترتیب توکن‌ها در جمله راست‌به‌چپ
+    return "".join(reversed(shaped_tokens))
+
+
 def _shape_persian_text(text: str) -> str:
     """متن فارسی را نرمال، متصل و راست‌به‌چپ مرتب می‌کند."""
     s = _normalize_persian_chars(text)
@@ -84,16 +198,14 @@ def _shape_persian_text(text: str) -> str:
     has_persian = any("\u0600" <= ch <= "\u06FF" for ch in s)
     if not has_persian:
         return s
-    try:
-        if _FA_RESHAPER is not None:
-            s = _FA_RESHAPER.reshape(s)
-        elif arabic_reshaper is not None:
-            s = arabic_reshaper.reshape(s)
-        if get_display is not None:
-            s = get_display(s)
-    except Exception:
-        pass
-    return s
+
+    if _FA_RESHAPER is not None and get_display is not None:
+        try:
+            return get_display(_FA_RESHAPER.reshape(s))
+        except Exception:
+            pass
+
+    return _builtin_persian_reshape_and_bidi(s)
 
 
 def ensure_default_logos():
@@ -376,7 +488,6 @@ def extract_vocal_and_rhythm_envelope(
     انرژی را با تمرکز بالا روی وکال (حدود ۳۰۰ تا ۳۲۰۰ هرتز) و کمی ریتم کلی آهنگ استخراج می‌کند.
     """
     total_frames = max(1, int(duration * fps))
-    # تمرکز روی محدوده فرکانسی وکال انسان با bandpass در 1500Hz و پهنای 1800Hz
     vocal_env = _extract_pcm_envelope(
         audio_path,
         start_sec,
@@ -397,7 +508,6 @@ def extract_vocal_and_rhythm_envelope(
     combined: list[float] = []
     prev_v = 0.2
     for v, r in zip(vocal_env, rhythm_env):
-        # ۷۸٪ حساسیت به وکال و ۲۲٪ به ریتم
         target = min(1.0, v * 0.78 + r * 0.22)
         cur = max(0.06, target * 0.82 + prev_v * 0.18)
         prev_v = cur
@@ -477,8 +587,8 @@ def draw_linear_equalizer(
     style: str = EQ_STYLE,
 ) -> int:
     """
-    اکولایزر خطی را روی بک‌گراند ریلز رسم می‌کند و مختصات خط پایه/پایین اکولایزر را برمی‌گرداند
-    تا واترماک دقیقاً زیر آن با فاصله کم قرار بگیرد.
+    اکولایزر خطی حساس به وکال و ریتم را روی بک‌گراند ریلز رسم می‌کند
+    و مختصات پایین اکولایزر را برمی‌گرداند.
     """
     draw = ImageDraw.Draw(frame)
     r, g, b, alpha = eq_rgba
@@ -493,7 +603,6 @@ def draw_linear_equalizer(
     base_y = HEIGHT - 150
     max_h = 78
 
-    # خط افقی راهنمای ظریف در پایه اکولایزر
     draw.line(
         [(start_x, base_y + 2), (start_x + total_w, base_y + 2)],
         fill=dim_color,
@@ -501,22 +610,19 @@ def draw_linear_equalizer(
     )
 
     for i in range(line_count):
-        norm_pos = (i / max(1, line_count - 1)) * 2.0 - 1.0  # -1 تا +1
+        norm_pos = (i / max(1, line_count - 1)) * 2.0 - 1.0
         center_weight = max(0.3, 1.0 - 0.55 * abs(norm_pos))
 
-        # حرکت خطیِ حساس به وکال + کمی موج ریتمیک
         vocal_wave = abs(math.sin(f_idx * 0.72 + i * 0.85)) ** 1.25
         rhythm_tick = 0.75 + 0.25 * math.cos(f_idx * 0.35 + i * 0.4)
         h = max(5, int(max_h * amp * center_weight * vocal_wave * rhythm_tick))
 
         x = start_x + i * (line_w + gap)
         if style == "dual_linear":
-            # سبک خطی دوطرفه عمودی حول محور میانی
             mid_y = base_y - 34
             half_h = max(4, h // 2)
             draw.line([(x, mid_y - half_h), (x, mid_y + half_h)], fill=main_color, width=line_w)
         else:
-            # سبک خطی بخش‌بخش (Segmented Linear) با شکاف‌های ریز خطی
             seg_h = 7
             seg_gap = 3
             cur_y = base_y
@@ -531,7 +637,7 @@ def draw_linear_equalizer(
 
 
 def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font_wm) -> Image.Image:
-    """واترمارک کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله."""
+    """واترمارک کوچک با آیکون‌های واضح‌تر و متن ۴۰٪ شفاف زیر هم بدون فاصله."""
     block_w = 240
     block_h = 44
     block = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
@@ -541,10 +647,10 @@ def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font
     row_step = 22
 
     block.paste(tg_logo, (0, 1), tg_logo)
-    draw.text((icon_size + 5, 2), TG_TEXT, font=font_wm, fill=(255, 255, 255, WM_ALPHA))
+    draw.text((icon_size + 5, 2), TG_TEXT, font=font_wm, fill=(255, 255, 255, WM_TEXT_ALPHA))
 
     block.paste(ig_logo, (0, row_step + 1), ig_logo)
-    draw.text((icon_size + 5, row_step + 2), IG_TEXT, font=font_wm, fill=(255, 255, 255, WM_ALPHA))
+    draw.text((icon_size + 5, row_step + 2), IG_TEXT, font=font_wm, fill=(255, 255, 255, WM_TEXT_ALPHA))
 
     return block
 
@@ -617,7 +723,7 @@ def build_synced_reel(
     """
     بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
     صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی حساس به وکال/ریتم و متن بولد فارسی را روی بک‌گراند می‌گذارد
-    و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را در وسط و زیر اکولایزر با فاصله کم قرار می‌دهد.
+    و واترماک ثابت را در وسط و زیر اکولایزر با فاصله کم قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -637,13 +743,12 @@ def build_synced_reel(
     _log(f"تعداد عبارات زمان‌بندی‌شده: {len(cues)}")
 
     ensure_default_logos()
-    opacity = WM_ALPHA / 255.0
     font_wm = load_bold_font(18)
     font_center = load_bold_font(44)
     emoji_font = load_emoji_font(44)
 
-    tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((20, 20)), opacity)
-    ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((20, 20)), opacity)
+    tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((20, 20)), WM_ICON_OPACITY)
+    ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((20, 20)), WM_ICON_OPACITY)
     wm_block = make_fixed_bottom_watermark(tg_logo, ig_logo, font_wm)
     wm_w, wm_h = wm_block.size
 
@@ -834,7 +939,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر خطی حساس به وکال و واترماک زیر آن آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با متن فارسی متصل و راست‌به‌چپ، اکولایزر خطی و واترماک واضح‌تر آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
