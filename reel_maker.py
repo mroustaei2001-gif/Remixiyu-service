@@ -1,5 +1,6 @@
 import math
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -11,13 +12,17 @@ IG_TEXT = "remixiyu"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TG_LOGO_PATH = os.path.join(BASE_DIR, "tg_logo.png")
 IG_LOGO_PATH = os.path.join(BASE_DIR, "ig_logo.png")
+CHANNEL_LOGO_PATH = os.path.join(BASE_DIR, "channel_logo.png")
+COVER_FALLBACK_PATH = os.path.join(BASE_DIR, "cover.png")
 
 MAX_DURATION = 60
 WIDTH = 720
 HEIGHT = 1280
 FPS = 20
-WM_TEXT_ALPHA = 102      # حدود ۴۰ درصد شفافیت برای متن واترماک
-WM_ICON_OPACITY = 0.82   # وضوح مناسب آیکون‌های تلگرام و اینستاگرام
+WM_TEXT_ALPHA = 102        # حدود ۴۰ درصد شفافیت برای متن واترمارک
+WM_ICON_OPACITY = 0.82     # وضوح آیکون‌های تلگرام و اینستاگرام
+CHANNEL_AVATAR_SIZE = 38   # سایز کمی بزرگ‌تر و مجزا برای عکس کانال
+CHANNEL_AVATAR_OPACITY = 0.94
 EQ_STYLE = "segmented_linear"
 
 EQ_COLOR_PALETTE = [
@@ -63,7 +68,7 @@ def apply_opacity(img: Image.Image, alpha_factor: float) -> Image.Image:
     return Image.merge("RGBA", (r, g, b, a))
 
 
-def load_wm_font(size: int = 18):
+def load_wm_font(size: int = 15):
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -76,6 +81,51 @@ def load_wm_font(size: int = 18):
             except Exception:
                 pass
     return ImageFont.load_default()
+
+
+def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Image.Image:
+    """عکس کانال را به‌صورت دایره‌ای و کمی بزرگ‌تر آماده می‌کند."""
+    src_path = None
+    if os.path.exists(CHANNEL_LOGO_PATH):
+        src_path = CHANNEL_LOGO_PATH
+    elif os.path.exists(COVER_FALLBACK_PATH):
+        src_path = COVER_FALLBACK_PATH
+
+    if src_path:
+        try:
+            raw = Image.open(src_path).convert("RGBA")
+            # برش مربعی از مرکز پیش از تغییر سایز برای جلوگیری از کشیدگی
+            w, h = raw.size
+            side = min(w, h)
+            left = (w - side) // 2
+            top = (h - side) // 2
+            cropped = raw.crop((left, top, left + side, top + side)).resize(
+                (size, size), Image.Resampling.LANCZOS
+            )
+
+            mask = Image.new("L", (size, size), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+
+            avatar = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            avatar.paste(cropped, (0, 0), mask)
+            ImageDraw.Draw(avatar).ellipse(
+                (0, 0, size - 1, size - 1), outline=(255, 255, 255, 190), width=2
+            )
+            return apply_opacity(avatar, CHANNEL_AVATAR_OPACITY)
+        except Exception as e:
+            _log(f"خطا در آماده‌سازی عکس کانال: {e}")
+
+    # آواتار پیش‌فرض دایره‌ای در صورت نبود فایل عکس کانال
+    avatar = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(avatar)
+    draw.ellipse((1, 1, size - 2, size - 2), fill=(30, 30, 36, 235), outline=(255, 255, 255, 190), width=2)
+    badge_font = font_badge or load_wm_font(max(12, size // 2))
+    label = "R"
+    bbox = draw.textbbox((0, 0), label, font=badge_font)
+    lw = bbox[2] - bbox[0]
+    lh = bbox[3] - bbox[1]
+    draw.text(((size - lw) // 2, (size - lh) // 2 - 1), label, font=badge_font, fill=(255, 255, 255, 240))
+    return apply_opacity(avatar, CHANNEL_AVATAR_OPACITY)
 
 
 def parse_time_to_seconds(t_str: str) -> float:
@@ -237,7 +287,6 @@ def extract_emphasis_vocal_envelope(
     prev_out = 0.2
 
     for cur_raw in base_sig:
-        # جهش ناگهانی یا عبور از سطح میانگین را به‌عنوان کلمه تاکیدی / اوج خواننده تقویت می‌کنیم
         delta = max(0.0, cur_raw - prev_raw)
         accent_boost = delta * 1.9
         if cur_raw > avg_energy * 1.15:
@@ -281,14 +330,12 @@ def draw_linear_equalizer(
         width=2,
     )
 
-    # سرعت حرکت موج از راست به چپ عمداً آرام‌تر تنظیم شده است
     right_to_left_phase = f_idx * 0.22
 
     for i in range(line_count):
-        norm_pos = (i / max(1, line_count - 1)) * 2.0 - 1.0  # -1 (چپ) تا +1 (راست)
+        norm_pos = (i / max(1, line_count - 1)) * 2.0 - 1.0
         center_weight = max(0.32, 1.0 - 0.52 * abs(norm_pos))
 
-        # حرکت موج از راست به چپ با سرعت کم، همراه با پالس روی کلمات تاکیدی
         travel_wave = abs(math.sin(right_to_left_phase - i * 0.28)) ** 1.25
         emphasis_pulse = 0.65 + 0.35 * (amp ** 1.3)
         h = max(5, int(max_h * amp * center_weight * travel_wave * emphasis_pulse))
@@ -312,21 +359,74 @@ def draw_linear_equalizer(
     return base_y + 4
 
 
-def make_fixed_bottom_watermark(tg_logo: Image.Image, ig_logo: Image.Image, font_wm) -> Image.Image:
-    """واترمارک کوچک با آیکون‌های واضح‌تر و متن ۴۰٪ شفاف زیر هم بدون فاصله."""
-    block_w = 240
-    block_h = 44
-    block = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
+def make_fixed_bottom_watermark(
+    tg_logo: Image.Image,
+    ig_logo: Image.Image,
+    channel_avatar: Image.Image,
+    font_wm,
+    icon_size: int = 18,
+) -> Image.Image:
+    """
+    عکس کانال را به‌صورت مجزا و کمی بزرگ‌تر کنار بخش واترمارک (آیکون‌های TG/IG + متن‌ها)
+    و در یک ترکیبِ متعادل و هم‌تراز قرار می‌دهد.
+    """
+    temp_img = Image.new("RGBA", (1, 1))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    def text_size(txt: str) -> tuple[int, int]:
+        bbox = temp_draw.textbbox((0, 0), txt, font=font_wm)
+        return max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
+
+    tg_w, tg_h = text_size(TG_TEXT)
+    ig_w, ig_h = text_size(IG_TEXT)
+
+    icon_text_gap = 6
+    group_gap = 16
+    avatar_to_wm_gap = 10
+    pad_x = 6
+    pad_y = 4
+
+    tg_group_w = icon_size + icon_text_gap + tg_w
+    ig_group_w = icon_size + icon_text_gap + ig_w
+    wm_part_w = tg_group_w + group_gap + ig_group_w
+    wm_part_h = max(icon_size, tg_h, ig_h)
+
+    avatar_w, avatar_h = channel_avatar.size
+    total_w = avatar_w + avatar_to_wm_gap + wm_part_w + pad_x * 2
+    total_h = max(avatar_h, wm_part_h) + pad_y * 2
+
+    block = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(block)
 
-    icon_size = 20
-    row_step = 22
+    # عکس مجزا و کمی بزرگ‌تر کانال در سمت چپ ترکیب
+    avatar_x = pad_x
+    avatar_y = (total_h - avatar_h) // 2
+    block.paste(channel_avatar, (avatar_x, avatar_y), channel_avatar)
 
-    block.paste(tg_logo, (0, 1), tg_logo)
-    draw.text((icon_size + 5, 2), TG_TEXT, font=font_wm, fill=(255, 255, 255, WM_TEXT_ALPHA))
+    # بخش واترمارک (آیکون‌ها + متن‌ها) دقیقاً کنار عکس کانال و هم‌تراز عمودی
+    wm_origin_x = avatar_x + avatar_w + avatar_to_wm_gap
+    wm_origin_y = (total_h - wm_part_h) // 2
+    icon_y = wm_origin_y + (wm_part_h - icon_size) // 2
 
-    block.paste(ig_logo, (0, row_step + 1), ig_logo)
-    draw.text((icon_size + 5, row_step + 2), IG_TEXT, font=font_wm, fill=(255, 255, 255, WM_TEXT_ALPHA))
+    tg_x = wm_origin_x
+    tg_text_y = wm_origin_y + (wm_part_h - tg_h) // 2
+    block.paste(tg_logo, (tg_x, icon_y), tg_logo)
+    draw.text(
+        (tg_x + icon_size + icon_text_gap, tg_text_y),
+        TG_TEXT,
+        font=font_wm,
+        fill=(255, 255, 255, WM_TEXT_ALPHA),
+    )
+
+    ig_x = tg_x + tg_group_w + group_gap
+    ig_text_y = wm_origin_y + (wm_part_h - ig_h) // 2
+    block.paste(ig_logo, (ig_x, icon_y), ig_logo)
+    draw.text(
+        (ig_x + icon_size + icon_text_gap, ig_text_y),
+        IG_TEXT,
+        font=font_wm,
+        fill=(255, 255, 255, WM_TEXT_ALPHA),
+    )
 
     return block
 
@@ -342,7 +442,7 @@ def build_synced_reel(
     """
     بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
     صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی را با حرکت آرام از راست به چپ و واکنش قوی‌تر به کلمات تاکیدی
-    روی بک‌گراند می‌گذارد و واترماک ثابت را در وسط و زیر اکولایزر با فاصله کم قرار می‌دهد.
+    روی بک‌گراند می‌گذارد و عکس کانال + واترمارک را در وسط و زیر اکولایزر با فاصله کم قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -360,16 +460,25 @@ def build_synced_reel(
     energies = extract_emphasis_vocal_envelope(audio_path, start_sec, duration, FPS)
 
     ensure_default_logos()
-    font_wm = load_wm_font(18)
+    icon_px = 18
+    font_wm = load_wm_font(15)
 
-    tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((20, 20)), WM_ICON_OPACITY)
-    ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((20, 20)), WM_ICON_OPACITY)
-    wm_block = make_fixed_bottom_watermark(tg_logo, ig_logo, font_wm)
+    tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((icon_px, icon_px)), WM_ICON_OPACITY)
+    ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((icon_px, icon_px)), WM_ICON_OPACITY)
+    channel_avatar = build_channel_avatar(size=CHANNEL_AVATAR_SIZE, font_badge=load_wm_font(18))
+
+    wm_block = make_fixed_bottom_watermark(
+        tg_logo=tg_logo,
+        ig_logo=ig_logo,
+        channel_avatar=channel_avatar,
+        font_wm=font_wm,
+        icon_size=icon_px,
+    )
     wm_w, wm_h = wm_block.size
 
     fixed_wm_x = (WIDTH - wm_w) // 2
     eq_bottom_y = HEIGHT - 146
-    gap_below_eq = 12
+    gap_below_eq = 10
     fixed_wm_y = min(HEIGHT - wm_h - 10, eq_bottom_y + gap_below_eq)
 
     is_video = video_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
@@ -463,7 +572,6 @@ def build_synced_reel(
             frame = Image.frombytes("RGB", (WIDTH, HEIGHT), raw_frame).convert("RGBA")
             amp = energies[f_idx] if f_idx < len(energies) else 0.2
 
-            # تغییر آرام رنگ اکولایزر بر اساس بخش‌های موزیک
             color_idx = (f_idx // max(1, FPS * 8)) % len(EQ_COLOR_PALETTE)
             eq_rgba = EQ_COLOR_PALETTE[color_idx]
 
