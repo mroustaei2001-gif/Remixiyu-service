@@ -23,14 +23,16 @@ IG_TEXT = "remixiyu"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(BASE_DIR, "fonts")
-AUTO_FONT_PATH = os.path.join(FONTS_DIR, "PersianBoldFont.ttf")
+CUSTOM_FONT_PATH = os.path.join(FONTS_DIR, "CustomUserFont.ttf")
+AUTO_FONT_PATH = os.path.join(FONTS_DIR, "PersianMinimalFont.ttf")
 TG_LOGO_PATH = os.path.join(BASE_DIR, "tg_logo.png")
 IG_LOGO_PATH = os.path.join(BASE_DIR, "ig_logo.png")
 
+# فونت‌های ظریف و خوش‌فرم فارسی (Medium/Regular) برای استایل کوچک و مینیمال
 FONT_DOWNLOAD_URLS = [
-    "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Bold.ttf",
-    "https://github.com/google/fonts/raw/main/ofl/notosansarabic/static/NotoSansArabic-Bold.ttf",
-    "https://github.com/google/fonts/raw/main/ofl/rubik/Rubik-Bold.ttf",
+    "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Medium.ttf",
+    "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Regular.ttf",
+    "https://github.com/google/fonts/raw/main/ofl/notosansarabic/static/NotoSansArabic-Medium.ttf",
 ]
 
 MAX_DURATION = 60
@@ -38,14 +40,15 @@ WIDTH = 720
 HEIGHT = 1280
 FPS = 20
 WM_TEXT_ALPHA = 102      # حدود ۴۰ درصد شفافیت برای متن واترماک
-WM_ICON_OPACITY = 0.82   # وضوح بیشتر آیکون‌های تلگرام و اینستاگرام
+WM_ICON_OPACITY = 0.82   # وضوح مناسب آیکون‌های تلگرام و اینستاگرام
+MINIMAL_FONT_SIZE = 28   # سایز کوچک، ریز و مینیمال برای متن وسط
 EQ_STYLE = "segmented_linear"
 
 TEXT_COLOR_PALETTE = [
-    (255, 255, 255, 252),  # سفید خالص
-    (255, 214, 10, 252),   # زرد طلایی
-    (120, 220, 255, 252),  # آبی روشن
-    (255, 130, 185, 252),  # صورتی ملایم
+    (255, 255, 255, 248),  # سفید خالص
+    (255, 232, 165, 248),  # کرم طلایی ملایم
+    (185, 235, 255, 248),  # آبی یخی روشن
+    (255, 200, 225, 248),  # صورتی پاستلی روشن
 ]
 
 EQ_COLOR_PALETTE = [
@@ -107,21 +110,21 @@ def apply_opacity(img: Image.Image, alpha_factor: float) -> Image.Image:
 
 
 def download_font_if_needed() -> str | None:
-    """در صورت نبود فونت بولد غیرمتغیر فارسی روی سیستم، آن را به صورت خودکار دانلود می‌کند."""
+    """در صورت نبود فونت فارسی روی سیستم، فونت ظریف فارسی را به صورت خودکار دانلود می‌کند."""
     if os.path.exists(AUTO_FONT_PATH) and os.path.getsize(AUTO_FONT_PATH) > 15000:
         return AUTO_FONT_PATH
 
     os.makedirs(FONTS_DIR, exist_ok=True)
     for url in FONT_DOWNLOAD_URLS:
         try:
-            _log(f"در حال دانلود فونت بولد فارسی: {url}")
+            _log(f"در حال دانلود فونت ظریف فارسی: {url}")
             resp = requests.get(url, timeout=20)
             if resp.status_code == 200 and resp.content and len(resp.content) > 15000:
                 tmp_font = AUTO_FONT_PATH + ".tmp"
                 with open(tmp_font, "wb") as f:
                     f.write(resp.content)
                 os.replace(tmp_font, AUTO_FONT_PATH)
-                _log("فونت بولد فارسی با موفقیت دانلود و ذخیره شد.")
+                _log("فونت ظریف فارسی با موفقیت دانلود و ذخیره شد.")
                 return AUTO_FONT_PATH
         except Exception as e:
             _log(f"خطا در دانلود فونت از {url}: {e}")
@@ -129,14 +132,15 @@ def download_font_if_needed() -> str | None:
     return None
 
 
-def get_bold_font_path() -> str | None:
+def get_active_font_path() -> str | None:
+    """اگر کاربر با .setfont فونت سفارشی داده باشد آن را برمی‌گرداند، وگرنه فونت ظریف پیش‌فرض."""
+    if os.path.exists(CUSTOM_FONT_PATH) and os.path.getsize(CUSTOM_FONT_PATH) > 5000:
+        return CUSTOM_FONT_PATH
     downloaded = download_font_if_needed()
     candidates = [
         downloaded,
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
@@ -145,8 +149,8 @@ def get_bold_font_path() -> str | None:
     return None
 
 
-def load_bold_font(size: int):
-    path = get_bold_font_path()
+def load_font(size: int):
+    path = get_active_font_path()
     if path:
         try:
             return ImageFont.truetype(path, size=size)
@@ -359,9 +363,7 @@ def extract_vocal_and_rhythm_envelopes(
     audio_path: str, start_sec: float, duration: float, fps: int
 ) -> tuple[list[float], list[float]]:
     """
-    انرژی وکال و ترکیب وکال+ریتم را استخراج می‌کند:
-    - خروجی اول: ترکیب ۷۸٪ وکال + ۲۲٪ ریتم برای حرکت اکولایزر خطی
-    - خروجی دوم: انرژی خالص وکال برای تشخیص بازه‌های فعالِ خواندن و سینک متن
+    انرژی وکال و ترکیب وکال+ریتم را استخراج می‌کند.
     """
     total_frames = max(1, int(duration * fps))
     vocal_env = _extract_pcm_envelope(
@@ -391,6 +393,62 @@ def extract_vocal_and_rhythm_envelopes(
     return combined, vocal_env
 
 
+def _detect_vocal_speech_segments(
+    audio_path: str, start_sec: float, duration: float
+) -> list[tuple[float, float]]:
+    """
+    با فیلتر bandpass وکال و silencedetect، بازه‌های زمانیِ واقعیِ خواندن خواننده را استخراج می‌کند.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-threads",
+        "1",
+        "-ss",
+        str(start_sec),
+        "-t",
+        str(duration),
+        "-i",
+        audio_path,
+        "-af",
+        "bandpass=f=1500:w=1800:t=h,silencedetect=noise=-28dB:d=0.35",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        res = subprocess.run(
+            cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30
+        )
+        err = (res.stderr or b"").decode("utf-8", errors="ignore")
+    except Exception:
+        return [(0.0, duration)]
+
+    silences: list[tuple[float, float]] = []
+    cur_start: float | None = None
+    for line in err.splitlines():
+        m_start = re.search(r"silence_start:\s*([0-9.]+)", line)
+        if m_start:
+            cur_start = float(m_start.group(1))
+        m_end = re.search(r"silence_end:\s*([0-9.]+)", line)
+        if m_end and cur_start is not None:
+            silences.append((cur_start, float(m_end.group(1))))
+            cur_start = None
+    if cur_start is not None:
+        silences.append((cur_start, duration))
+
+    speech_segs: list[tuple[float, float]] = []
+    cursor = 0.0
+    for s_start, s_end in silences:
+        if s_start - cursor >= 0.35:
+            speech_segs.append((cursor, min(duration, s_start)))
+        cursor = max(cursor, s_end)
+    if duration - cursor >= 0.35:
+        speech_segs.append((cursor, duration))
+
+    return speech_segs if speech_segs else [(0.0, duration)]
+
+
 def _clean_phrase_text(raw: str) -> str:
     """نقطه‌ها و نشانه‌های اضافی تبدیل‌صوت را تمیز می‌کند و حروف را به فارسی نرمال می‌کند."""
     cleaned = _normalize_persian_chars(raw)
@@ -399,30 +457,75 @@ def _clean_phrase_text(raw: str) -> str:
     return cleaned
 
 
+def _parse_timed_lines(raw_text: str) -> list[tuple[float | None, str]]:
+    """
+    خطوط متن را بررسی می‌کند؛ اگر ابتدای خط زمان باشد (مثل `00:04 متن`) زمان شروع را می‌گیرد،
+    وگرنه `None` برمی‌گرداند تا خودکار روی بخش‌های وکال سینک شود.
+    """
+    lines = [part.strip() for part in re.split(r"\n+|\s*\|\s*", raw_text.strip()) if part.strip()]
+    parsed: list[tuple[float | None, str]] = []
+    for line in lines:
+        m = re.match(r"^\[?(\d{1,2}:\d{2}(?:\.\d+)?|\d+(?:\.\d+)?s?)\]?\s+(.+)$", line)
+        if m:
+            t_raw = m.group(1).rstrip("s")
+            phrase = _clean_phrase_text(m.group(2))
+            if phrase:
+                try:
+                    parsed.append((parse_time_to_seconds(t_raw), phrase))
+                    continue
+                except ValueError:
+                    pass
+        phrase = _clean_phrase_text(line)
+        if phrase:
+            parsed.append((None, phrase))
+    return parsed
+
+
 def build_vocal_synced_cues(
-    lyrics_text: str, duration: float, fps: int, vocal_env: list[float]
+    lyrics_text: str,
+    audio_path: str,
+    start_sec: float,
+    duration: float,
+    fps: int,
+    vocal_env: list[float],
 ) -> list[tuple[int, int, str]]:
     """
-    متن را بر اساس خط‌بندی کاربر (یا جداکننده |) می‌گیرد و فقط در فریم‌هایی که
-    انرژی وکال فعال است توزیع می‌کند تا متن در بخش‌های بی‌کلام جلو نزند و با خواننده سینک بماند.
+    سینک متن با خواننده:
+    1. اگر کاربر کنار خط‌ها زمان شروع داده باشد (`00:03 متن`)، دقیقاً روی همان ثانیه‌ها می‌نشیند.
+    2. در غیر این صورت، با `silencedetect` بخش‌های واقعیِ خواندن خواننده پیدا شده و عبارات روی آن‌ها توزیع می‌شوند.
     """
-    clean = lyrics_text.strip()
-    if not clean:
+    timed_items = _parse_timed_lines(lyrics_text)
+    if not timed_items:
         return []
 
-    has_explicit_lines = ("\n" in clean) or ("|" in clean)
-    raw_chunks = [part.strip() for part in re.split(r"\n+|\s*\|\s*", clean) if part.strip()]
+    total_frames = max(1, int(duration * fps))
 
+    # حالت اول: زمان‌بندی دستی خط‌به‌خط (LRC ساده)
+    if any(t is not None for t, _ in timed_items):
+        cues: list[tuple[int, int, str]] = []
+        valid_timed: list[tuple[float, str]] = []
+        last_t = 0.0
+        for t_val, phrase in timed_items:
+            t_use = t_val if t_val is not None else last_t + 2.5
+            t_use = max(0.0, min(duration - 0.3, t_use))
+            valid_timed.append((t_use, phrase))
+            last_t = t_use
+
+        for idx, (t_start, phrase) in enumerate(valid_timed):
+            t_end = valid_timed[idx + 1][0] if idx + 1 < len(valid_timed) else duration
+            s_f = max(0, min(total_frames - 1, int(round(t_start * fps))))
+            e_f = max(s_f + 2, min(total_frames - 1, int(round(t_end * fps)) - 1))
+            cues.append((s_f, e_f, phrase))
+        return cues
+
+    # حالت دوم: خرد کردن منطقی فقط اگر خط‌ها خیلی طولانی باشند
+    has_explicit_lines = ("\n" in lyrics_text.strip()) or ("|" in lyrics_text.strip())
     phrases: list[str] = []
-    for ch in raw_chunks:
-        cleaned_ch = _clean_phrase_text(ch)
-        if not cleaned_ch:
-            continue
-        words = [w.strip() for w in cleaned_ch.split() if w.strip()]
-        # اگر کاربر خط‌بندی دستی کرده باشد، به خطوط او احترام می‌گذاریم (تا ۵ کلمه در یک خط)
-        max_words = 5 if has_explicit_lines else 3
+    for _, ch in timed_items:
+        words = [w.strip() for w in ch.split() if w.strip()]
+        max_words = 6 if has_explicit_lines else 4
         if len(words) <= max_words:
-            phrases.append(cleaned_ch)
+            phrases.append(ch)
         else:
             for i in range(0, len(words), max_words):
                 part_phrase = " ".join(words[i : i + max_words]).strip()
@@ -432,25 +535,19 @@ def build_vocal_synced_cues(
     if not phrases:
         return []
 
-    total_frames = max(1, len(vocal_env))
-    # آستانه تشخیص فعال بودن صدای خواننده در هر فریم
-    avg_vocal = sum(vocal_env) / total_frames
-    threshold = max(0.14, avg_vocal * 0.58)
-    active_frames = [idx for idx, val in enumerate(vocal_env) if val >= threshold]
+    speech_segs = _detect_vocal_speech_segments(audio_path, start_sec, duration)
+    active_frames: list[int] = []
+    for seg_s, seg_e in speech_segs:
+        f0 = max(0, int(round(seg_s * fps)))
+        f1 = min(total_frames - 1, int(round(seg_e * fps)))
+        active_frames.extend(range(f0, f1 + 1))
 
-    # اگر کل فایل خیلی آرام بود، از کل فریم‌ها استفاده می‌کنیم
     if len(active_frames) < len(phrases) * 4:
         active_frames = list(range(total_frames))
 
-    weights = []
-    for p in phrases:
-        word_cnt = max(1, len(p.split()))
-        char_cnt = len(re.sub(r"\s+", "", p))
-        weights.append(max(2.5, word_cnt * 2.1 + char_cnt * 0.45))
-
-    total_w = sum(weights)
+    weights = [max(2.5, len(p.split()) * 2.0 + len(re.sub(r"\s+", "", p)) * 0.4) for p in phrases]
     n_active = len(active_frames)
-    cues: list[tuple[int, int, str]] = []
+    cues = []
     act_cursor = 0
 
     for idx, (phrase, w) in enumerate(zip(phrases, weights)):
@@ -461,12 +558,9 @@ def build_vocal_synced_cues(
         take = max(4, int(round(remaining_act * (w / max(0.1, remaining_w)))))
         end_act = n_active - 1 if idx == len(phrases) - 1 else min(n_active - 1, act_cursor + take - 1)
 
-        start_f = active_frames[act_cursor]
-        end_f = active_frames[end_act]
-        if end_f < start_f:
-            end_f = start_f
-
-        cues.append((start_f, end_f, phrase))
+        s_f = active_frames[act_cursor]
+        e_f = max(s_f, active_frames[end_act])
+        cues.append((s_f, e_f, phrase))
         act_cursor = end_act + 1
 
     return cues
@@ -476,8 +570,7 @@ def _render_text_via_ffmpeg_drawtext(
     text: str, font_path: str, color_rgba: tuple[int, int, int, int]
 ) -> Image.Image | None:
     """
-    متن فارسی را مستقیماً با موتور شکل‌دهی داخلی ffmpeg (HarfBuzz/FriBidi) روی تصویر شفاف رندر می‌کند
-    تا حروف فارسی ۱۰۰٪ متصل و راست‌به‌چپ باشند.
+    متن فارسی را با سایز کوچک و ظریف (مینیمال) و بدون کادر شلوغ با موتور داخلی ffmpeg رندر می‌کند.
     """
     if not font_path or not os.path.exists(font_path):
         return None
@@ -494,10 +587,11 @@ def _render_text_via_ffmpeg_drawtext(
         safe_font = font_path.replace("\\", "/").replace(":", "\\:")
         safe_txt = txt_file.replace("\\", "/").replace(":", "\\:")
 
+        # استایل کوچک، ظریف و مینیمال با سایه نرم و حاشیه خیلی نازک (بدون کادر تیره)
         vf = (
             f"drawtext=fontfile='{safe_font}':textfile='{safe_txt}':"
-            f"text_shaping=1:fontsize=44:fontcolor={hex_color}:"
-            f"borderw=3:bordercolor=black@0.95:"
+            f"text_shaping=1:fontsize={MINIMAL_FONT_SIZE}:fontcolor={hex_color}:"
+            f"borderw=1:bordercolor=black@0.75:shadowx=1:shadowy=2:shadowcolor=black@0.85:"
             f"x=(w-text_w)/2:y=(h-text_h)/2"
         )
         cmd = [
@@ -506,7 +600,7 @@ def _render_text_via_ffmpeg_drawtext(
             "-f",
             "lavfi",
             "-i",
-            f"color=c=black@0.0:s={WIDTH}x130:d=0.05",
+            f"color=c=black@0.0:s={WIDTH}x110:d=0.05",
             "-vf",
             vf,
             "-frames:v",
@@ -523,31 +617,21 @@ def _render_text_via_ffmpeg_drawtext(
                 img = Image.open(png_file).convert("RGBA")
                 bbox = img.getbbox()
                 if bbox:
-                    pad_x, pad_y = 26, 16
+                    pad_x, pad_y = 14, 10
                     x0 = max(0, bbox[0] - pad_x)
                     y0 = max(0, bbox[1] - pad_y)
                     x1 = min(img.width, bbox[2] + pad_x)
                     y1 = min(img.height, bbox[3] + pad_y)
-                    cropped = img.crop((x0, y0, x1, y1))
-
-                    bg = Image.new("RGBA", cropped.size, (0, 0, 0, 0))
-                    bdraw = ImageDraw.Draw(bg)
-                    bdraw.rounded_rectangle(
-                        (0, 0, cropped.width - 1, cropped.height - 1),
-                        radius=16,
-                        fill=(0, 0, 0, 145),
-                    )
-                    bg.paste(cropped, (0, 0), cropped)
-                    return bg
+                    return img.crop((x0, y0, x1, y1))
         except Exception as e:
             _log(f"drawtext fallback فعال شد: {e}")
     return None
 
 
 def _render_text_via_pillow_fallback(
-    text: str, font_bold, emoji_font, color_rgba: tuple[int, int, int, int]
+    text: str, font_minimal, color_rgba: tuple[int, int, int, int]
 ) -> Image.Image:
-    """رندر پشتیبان در صورتی که ffmpeg بدون drawtext کامپایل شده باشد."""
+    """رندر پشتیبان مینیمال در صورتی که ffmpeg بدون drawtext کامپایل شده باشد."""
     s = _normalize_persian_chars(text)
     if _FA_RESHAPER is not None and get_display is not None:
         try:
@@ -555,33 +639,30 @@ def _render_text_via_pillow_fallback(
         except Exception:
             pass
 
-    dummy = Image.new("RGBA", (WIDTH, 140), (0, 0, 0, 0))
+    dummy = Image.new("RGBA", (WIDTH, 110), (0, 0, 0, 0))
     draw = ImageDraw.Draw(dummy)
-    bbox = draw.textbbox((0, 0), s, font=font_bold)
+    bbox = draw.textbbox((0, 0), s, font=font_minimal)
     tw = max(1, bbox[2] - bbox[0])
     th = max(1, bbox[3] - bbox[1])
 
-    box_w = min(WIDTH - 32, tw + 56)
-    box_h = th + 36
+    box_w = min(WIDTH - 32, tw + 28)
+    box_h = th + 20
     canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
     tdraw = ImageDraw.Draw(canvas)
-    tdraw.rounded_rectangle((0, 0, box_w - 1, box_h - 1), radius=16, fill=(0, 0, 0, 145))
 
-    tx = max(10, (box_w - tw) // 2)
-    ty = max(8, (box_h - th) // 2)
-    for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3)):
-        tdraw.text((tx + ox, ty + oy), s, font=font_bold, fill=(0, 0, 0, 240))
-    tdraw.text((tx, ty), s, font=font_bold, fill=color_rgba)
+    tx = max(6, (box_w - tw) // 2)
+    ty = max(4, (box_h - th) // 2)
+    tdraw.text((tx + 1, ty + 2), s, font=font_minimal, fill=(0, 0, 0, 210))
+    tdraw.text((tx, ty), s, font=font_minimal, fill=color_rgba)
     return canvas
 
 
 def pre_render_cue_overlays(
     cues: list[tuple[int, int, str]],
     font_path: str | None,
-    font_bold,
-    emoji_font,
+    font_minimal,
 ) -> dict[int, Image.Image]:
-    """تصویر هر عبارت متنی را فقط یک بار می‌سازد تا ویدئو هم سریع‌تر و هم با فارسی واقعی رندر شود."""
+    """تصویر مینیمال هر عبارت متنی را فقط یک بار از پیش می‌سازد."""
     overlays: dict[int, Image.Image] = {}
     for idx, (_, _, phrase) in enumerate(cues):
         color_rgba = TEXT_COLOR_PALETTE[idx % len(TEXT_COLOR_PALETTE)]
@@ -592,7 +673,7 @@ def pre_render_cue_overlays(
             else None
         )
         if img is None:
-            img = _render_text_via_pillow_fallback(norm_phrase, font_bold, emoji_font, color_rgba)
+            img = _render_text_via_pillow_fallback(norm_phrase, font_minimal, color_rgba)
         overlays[idx] = img
     return overlays
 
@@ -605,8 +686,7 @@ def draw_linear_equalizer(
     style: str = EQ_STYLE,
 ) -> int:
     """
-    اکولایزر خطی حساس به وکال و ریتم را روی بک‌گراند ریلز رسم می‌کند
-    و مختصات پایین اکولایزر را برمی‌گرداند.
+    اکولایزر خطی حساس به وکال و ریتم را روی بک‌گراند ریلز رسم می‌کند.
     """
     draw = ImageDraw.Draw(frame)
     r, g, b, alpha = eq_rgba
@@ -683,7 +763,7 @@ def build_synced_reel(
 ) -> tuple[bool, str]:
     """
     بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
-    صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی حساس به وکال/ریتم و متن بولد فارسی واقعی را روی بک‌گراند می‌گذارد
+    صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی و متن ظریفِ مینیمال هماهنگ با خواننده را روی بک‌گراند می‌گذارد
     و واترماک ثابت را در وسط و زیر اکولایزر با فاصله کم قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
@@ -700,16 +780,15 @@ def build_synced_reel(
     _log(f"شروع ساخت ریلز به مدت {duration:.1f} ثانیه")
 
     eq_energies, vocal_env = extract_vocal_and_rhythm_envelopes(audio_path, start_sec, duration, FPS)
-    cues = build_vocal_synced_cues(lyrics_text, duration, FPS, vocal_env)
-    _log(f"تعداد عبارات زمان‌بندی‌شده با وکال: {len(cues)}")
+    cues = build_vocal_synced_cues(lyrics_text, audio_path, start_sec, duration, FPS, vocal_env)
+    _log(f"تعداد عبارات سینک‌شده با خواننده: {len(cues)}")
 
     ensure_default_logos()
-    font_path = get_bold_font_path()
-    font_wm = load_bold_font(18)
-    font_center = load_bold_font(44)
-    emoji_font = load_emoji_font(44)
+    font_path = get_active_font_path()
+    font_wm = load_font(18)
+    font_minimal = load_font(MINIMAL_FONT_SIZE)
 
-    cue_overlays = pre_render_cue_overlays(cues, font_path, font_center, emoji_font)
+    cue_overlays = pre_render_cue_overlays(cues, font_path, font_minimal)
 
     tg_logo = apply_opacity(Image.open(TG_LOGO_PATH).resize((20, 20)), WM_ICON_OPACITY)
     ig_logo = apply_opacity(Image.open(IG_LOGO_PATH).resize((20, 20)), WM_ICON_OPACITY)
@@ -895,7 +974,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با رندر واقعی فارسی و سینک با وکال آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با فونت ظریف مینیمال و سینک خواننده آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
