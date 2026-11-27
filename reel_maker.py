@@ -94,7 +94,6 @@ def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Im
     if src_path:
         try:
             raw = Image.open(src_path).convert("RGBA")
-            # برش مربعی از مرکز پیش از تغییر سایز برای جلوگیری از کشیدگی
             w, h = raw.size
             side = min(w, h)
             left = (w - side) // 2
@@ -115,7 +114,6 @@ def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Im
         except Exception as e:
             _log(f"خطا در آماده‌سازی عکس کانال: {e}")
 
-    # آواتار پیش‌فرض دایره‌ای در صورت نبود فایل عکس کانال
     avatar = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(avatar)
     draw.ellipse((1, 1, size - 2, size - 2), fill=(30, 30, 36, 235), outline=(255, 255, 255, 190), width=2)
@@ -167,7 +165,7 @@ def cut_audio_segment(
         "-c:a",
         "libmp3lame",
         "-b:a",
-        "128k",
+        "192k",
         output_audio_path,
     ]
     try:
@@ -398,12 +396,10 @@ def make_fixed_bottom_watermark(
     block = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(block)
 
-    # عکس مجزا و کمی بزرگ‌تر کانال در سمت چپ ترکیب
     avatar_x = pad_x
     avatar_y = (total_h - avatar_h) // 2
     block.paste(channel_avatar, (avatar_x, avatar_y), channel_avatar)
 
-    # بخش واترمارک (آیکون‌ها + متن‌ها) دقیقاً کنار عکس کانال و هم‌تراز عمودی
     wm_origin_x = avatar_x + avatar_w + avatar_to_wm_gap
     wm_origin_y = (total_h - wm_part_h) // 2
     icon_y = wm_origin_y + (wm_part_h - icon_size) // 2
@@ -442,7 +438,7 @@ def build_synced_reel(
     """
     بک‌گراند ریلز (ویدئو/عکس بدون واترماک) را تا سقف ۶۰ ثانیه و دقیقاً هم‌اندازه تایم موزیک کات می‌زند،
     صدای اصلی ویدئو را قطع می‌کند، اکولایزر خطی را با حرکت آرام از راست به چپ و واکنش قوی‌تر به کلمات تاکیدی
-    روی بک‌گراند می‌گذارد و عکس کانال + واترمارک را در وسط و زیر اکولایزر با فاصله کم قرار می‌دهد.
+    روی بک‌گراند می‌گذارد و عکس کانال + واترمارک را در وسط و زیر اکولایزر با فاصله کم و کیفیت بالا ذخیره می‌کند.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -532,17 +528,17 @@ def build_synced_reel(
         "-c:v",
         "libx264",
         "-preset",
-        "ultrafast",
+        "fast",
         "-threads",
         "1",
         "-x264-params",
         "threads=1:rc-lookahead=0:sync-lookahead=0:bframes=0:ref=1",
         "-crf",
-        "25",
+        "19",
         "-c:a",
         "aac",
         "-b:a",
-        "128k",
+        "192k",
         "-pix_fmt",
         "yuv420p",
         "-t",
@@ -644,7 +640,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با اکولایزر خطیِ آرام و حساس به کلمات تاکیدی آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با کیفیت بالاتر و اکولایزر آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
