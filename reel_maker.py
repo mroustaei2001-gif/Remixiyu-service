@@ -3,6 +3,7 @@ import os
 import re
 import struct
 import subprocess
+import sys
 import tempfile
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -27,6 +28,10 @@ COLOR_PALETTE = [
     (120, 220, 255, 250),  # آبی یخی
     (255, 120, 180, 250),  # صورتی نئونی
 ]
+
+
+def _log(msg: str):
+    print(f"[REEL_MAKER] {msg}", file=sys.stderr, flush=True)
 
 
 def ensure_default_logos():
@@ -133,10 +138,14 @@ def cut_audio_segment(
         output_audio_path,
     ]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(
+            cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60
+        )
         if not os.path.exists(output_audio_path) or os.path.getsize(output_audio_path) == 0:
             return False, 0.0, "برش موزیک خروجی تولید نکرد."
         return True, duration, f"برش {duration:.1f} ثانیه‌ای موزیک آماده شد."
+    except subprocess.TimeoutExpired:
+        return False, 0.0, "زمان برش موزیک بیش از حد طولانی شد."
     except subprocess.CalledProcessError as e:
         err_txt = (e.stderr or b"").decode("utf-8", errors="ignore").strip()
         return False, 0.0, f"خطا در برش موزیک:\n{err_txt[-800:]}"
@@ -179,7 +188,9 @@ def test_voicemaker_transcription(audio_path: str, timeout: int = 15) -> tuple[b
         with open(audio_path, "rb") as f:
             files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
             data = {"language": "persian", "lang": "fa"}
-            post_resp = session.post(url, headers=headers, files=files, data=data, timeout=timeout)
+            post_resp = session.post(
+                url, headers=headers, files=files, data=data, timeout=timeout
+            )
 
         ctype = post_resp.headers.get("Content-Type", "").lower()
         if "application/json" in ctype:
@@ -230,9 +241,14 @@ def extract_beat_envelope(
         pcm_path,
     ]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(
+            cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45
+        )
         with open(pcm_path, "rb") as f:
             raw = f.read()
+    except Exception as e:
+        _log(f"خطای استخراج ریتم صدا: {e}")
+        return [0.35] * total_frames
     finally:
         if os.path.exists(pcm_path):
             os.remove(pcm_path)
@@ -394,8 +410,9 @@ def build_synced_reel(
     lyrics_text: str,
 ) -> tuple[bool, str]:
     """
-    ویدئوی بدون واترماک را با موزیک ۶۰ ثانیه‌ای و متن ریتماتیک وسط صفحه ترکیب می‌کند
-    و واترماک کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را ثابت در پایین صفحه قرار می‌دهد.
+    ویدئوی پس‌زمینه را دقیقاً هم‌اندازه تایم موزیک کات می‌زند (اگر طولانی‌تر باشد برش می‌دهد
+    و اگر کوتاه‌تر باشد تا پایان تایم ادامه می‌دهد)، متن ریتماتیک را در وسط می‌گذارد
+    و واترماک ثابت کوچک، ۴۰٪ شفاف و زیر هم بدون فاصله را در پایین صفحه قرار می‌دهد.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -408,8 +425,11 @@ def build_synced_reel(
         return False, "زمان پایان باید بزرگ‌تر از زمان شروع باشد."
 
     duration = min(end_sec - start_sec, float(MAX_DURATION))
+    _log(f"شروع ساخت ریلز به مدت {duration:.1f} ثانیه ({start_sec}s تا {start_sec + duration}s)")
+
     energies = extract_beat_envelope(audio_path, start_sec, duration, FPS)
     cues = build_rhythmic_cues(lyrics_text, duration, FPS, energies)
+    _log(f"تعداد بازه‌های ریتمیک متن: {len(cues)}")
 
     ensure_default_logos()
     opacity = WM_ALPHA / 255.0
@@ -427,6 +447,7 @@ def build_synced_reel(
     fixed_wm_y = HEIGHT - wm_h - 48
 
     is_video = video_path.lower().endswith((".mp4", ".mov", ".mkv", ".webm"))
+    # اگر ویدئو طولانی‌تر از duration باشد دقیقاً در duration کات می‌خورد؛ اگر کوتاه‌تر باشد حلقه می‌شود
     vid_input = ["-stream_loop", "-1", "-i", video_path] if is_video else ["-loop", "1", "-i", video_path]
 
     dec_cmd = [
@@ -435,10 +456,10 @@ def build_synced_reel(
         "-threads",
         "1",
         *vid_input,
-        "-vf",
-        f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1",
         "-t",
         str(duration),
+        "-vf",
+        f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1",
         "-f",
         "rawvideo",
         "-pix_fmt",
@@ -499,11 +520,14 @@ def build_synced_reel(
 
     frame_bytes_len = WIDTH * HEIGHT * 3
     total_frames = max(1, int(duration * FPS))
+    written_frames = 0
 
     try:
+        _log(f"پردازش {total_frames} فریم آغاز شد...")
         for f_idx in range(total_frames):
             raw_frame = dec_proc.stdout.read(frame_bytes_len) if dec_proc.stdout else b""
             if not raw_frame or len(raw_frame) < frame_bytes_len:
+                _log(f"اتمام یا توقف جریان فریم ورودی در فریم {f_idx}")
                 break
 
             frame = Image.frombytes("RGB", (WIDTH, HEIGHT), raw_frame).convert("RGBA")
@@ -534,27 +558,39 @@ def build_synced_reel(
 
             if enc_proc.stdin:
                 enc_proc.stdin.write(frame.convert("RGB").tobytes())
+                written_frames += 1
+
+            if written_frames % 60 == 0 or written_frames == total_frames:
+                _log(f"پیشرفت فریم‌ها: {written_frames}/{total_frames}")
 
         if dec_proc.stdout:
             dec_proc.stdout.close()
         if enc_proc.stdin:
             enc_proc.stdin.close()
 
-        dec_proc.wait()
-        _, enc_err = enc_proc.communicate()
+        dec_err = dec_proc.stderr.read().decode("utf-8", errors="ignore").strip() if dec_proc.stderr else ""
+        if dec_proc.stderr:
+            dec_proc.stderr.close()
+
+        dec_proc.wait(timeout=30)
+        _, enc_err_bytes = enc_proc.communicate(timeout=60)
+        enc_err = (enc_err_bytes or b"").decode("utf-8", errors="ignore").strip()
 
         if enc_proc.returncode != 0:
-            err_txt = (enc_err or b"").decode("utf-8", errors="ignore").strip()
+            _log(f"خطای انکود ffmpeg با کد {enc_proc.returncode}: {enc_err[-400:]}")
             if enc_proc.returncode == -9:
                 return False, "خطا در ffmpeg (کد -9): رم کانتینر در لحظه انکود پر شد."
-            return False, f"خطا در ffmpeg (کد {enc_proc.returncode}):\n{err_txt[-1000:]}"
+            return False, f"خطا در ffmpeg (کد {enc_proc.returncode}):\n{enc_err[-1000:]}"
 
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            return False, "فایل ویدئویی نهایی ساخته نشد."
+        if written_frames == 0 or not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            _log(f"فایل خروجی ساخته نشد. dec_err={dec_err[-300:]}")
+            return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با سینک ریتماتیک، متن وسط و واترماک ثابت پایین آماده شد."
+        _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم).")
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با کات دقیق ویدئو، سینک ریتماتیک و واترماک ثابت پایین آماده شد."
 
     except Exception as e:
+        _log(f"استثنا در build_synced_reel: {e}")
         for p in (dec_proc, enc_proc):
             if p.poll() is None:
                 p.kill()
