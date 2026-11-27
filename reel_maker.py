@@ -103,8 +103,8 @@ _PERSIAN_GLYPH_FORMS: dict[str, tuple[str, str, str, str]] = {
     "ی": ("\uFBFC", "\uFBFD", "\uFBFE", "\uFBFF"),
 }
 
-# حروفی که فقط از راست می‌چسبند و به حرف بعدی وصل نمی‌شوند
 _RIGHT_JOIN_ONLY = {"آ", "ا", "أ", "إ", "د", "ذ", "ر", "ز", "ژ", "و", "ؤ"}
+_PUNCT_MIRROR = {"؟": "؟", "?": "؟", "!": "!", "«": "»", "»": "«", "(": ")", ")": "("}
 
 
 def _log(msg: str):
@@ -119,75 +119,71 @@ def _normalize_persian_chars(text: str) -> str:
     return s
 
 
-def _builtin_persian_reshape_and_bidi(text: str) -> str:
-    """موتور داخلی اتصال حروف فارسی و چینش راست‌به‌چپ برای اجرا بدون نیاز به کتابخانه خارجی."""
-    # ترکیب «ل» + «ا» / «آ» به «لا» / «لآ»
+def _shape_single_word(word: str) -> str:
+    """حروف یک کلمه فارسی را به هم متصل می‌کند و برای رندر چپ‌به‌راستِ Pillow معکوس می‌کند."""
     normalized = (
-        text.replace("لآ", "\uFEF5")
+        word.replace("لآ", "\uFEF5")
         .replace("لأ", "\uFEF7")
         .replace("لإ", "\uFEF9")
         .replace("لا", "\uFEFB")
     )
+    chars = list(normalized)
+    out_chars: list[str] = []
+    n = len(chars)
 
-    tokens = re.findall(r"\S+|\s+", normalized)
-    shaped_tokens: list[str] = []
-
-    for tok in tokens:
-        if tok.isspace():
-            shaped_tokens.append(tok)
-            continue
-
-        has_fa = any(ch in _PERSIAN_GLYPH_FORMS or ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB") for ch in tok)
-        if not has_fa:
-            shaped_tokens.append(tok)
-            continue
-
-        chars = list(tok)
-        out_chars: list[str] = []
-        n = len(chars)
-        for idx, ch in enumerate(chars):
-            if ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB"):
-                prev_ch = chars[idx - 1] if idx > 0 else ""
-                can_join_prev = (
-                    prev_ch in _PERSIAN_GLYPH_FORMS and prev_ch not in _RIGHT_JOIN_ONLY
-                )
-                # فرم پایانی لا با افزایش کد یونیک به اندازه ۱ به دست می‌آید
-                out_chars.append(chr(ord(ch) + 1) if can_join_prev else ch)
-                continue
-
-            if ch not in _PERSIAN_GLYPH_FORMS:
-                out_chars.append(ch)
-                continue
-
+    for idx, ch in enumerate(chars):
+        if ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB"):
             prev_ch = chars[idx - 1] if idx > 0 else ""
-            next_ch = chars[idx + 1] if idx + 1 < n else ""
-
             can_join_prev = (
                 prev_ch in _PERSIAN_GLYPH_FORMS and prev_ch not in _RIGHT_JOIN_ONLY
             )
-            can_join_next = (
-                ch not in _RIGHT_JOIN_ONLY
-                and (
-                    next_ch in _PERSIAN_GLYPH_FORMS
-                    or next_ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB")
-                )
+            out_chars.append(chr(ord(ch) + 1) if can_join_prev else ch)
+            continue
+
+        if ch not in _PERSIAN_GLYPH_FORMS:
+            out_chars.append(_PUNCT_MIRROR.get(ch, ch))
+            continue
+
+        prev_ch = chars[idx - 1] if idx > 0 else ""
+        next_ch = chars[idx + 1] if idx + 1 < n else ""
+
+        can_join_prev = (
+            prev_ch in _PERSIAN_GLYPH_FORMS and prev_ch not in _RIGHT_JOIN_ONLY
+        )
+        can_join_next = (
+            ch not in _RIGHT_JOIN_ONLY
+            and (
+                next_ch in _PERSIAN_GLYPH_FORMS
+                or next_ch in ("\uFEF5", "\uFEF7", "\uFEF9", "\uFEFB")
             )
+        )
 
-            isolated, final, initial, medial = _PERSIAN_GLYPH_FORMS[ch]
-            if can_join_prev and can_join_next:
-                out_chars.append(medial)
-            elif can_join_prev:
-                out_chars.append(final)
-            elif can_join_next:
-                out_chars.append(initial)
-            else:
-                out_chars.append(isolated)
+        isolated, final, initial, medial = _PERSIAN_GLYPH_FORMS[ch]
+        if can_join_prev and can_join_next:
+            out_chars.append(medial)
+        elif can_join_prev:
+            out_chars.append(final)
+        elif can_join_next:
+            out_chars.append(initial)
+        else:
+            out_chars.append(isolated)
 
-        # معکوس کردن ترتیب کاراکترهای فارسی برای نمایش راست‌به‌چپ
-        shaped_tokens.append("".join(reversed(out_chars)))
+    return "".join(reversed(out_chars))
 
-    # معکوس کردن ترتیب توکن‌ها در جمله راست‌به‌چپ
-    return "".join(reversed(shaped_tokens))
+
+def _builtin_persian_reshape_and_bidi(text: str) -> str:
+    """
+    چینش راست‌به‌چپ دقیق برای Pillow:
+    در عبارت فارسی «کلمه۱ کلمه۲؟»، در رسم چپ‌به‌راستِ Pillow باید «؟۲هملک ۱هملک» قرار بگیرد
+    تا وقتی چشم از راست به چپ می‌خواند، «کلمه۱ کلمه۲؟» در جهت درست خوانده شود.
+    """
+    words = [w for w in text.split() if w.strip()]
+    if not words:
+        return ""
+
+    shaped_words = [_shape_single_word(w) for w in words]
+    # معکوس کردن ترتیب کلمات تا در رسم چپ‌به‌راستِ Pillow، عبارت از راست به چپ خوانده شود
+    return " ".join(reversed(shaped_words))
 
 
 def _shape_persian_text(text: str) -> str:
@@ -201,7 +197,10 @@ def _shape_persian_text(text: str) -> str:
 
     if _FA_RESHAPER is not None and get_display is not None:
         try:
-            return get_display(_FA_RESHAPER.reshape(s))
+            reshaped = _FA_RESHAPER.reshape(s)
+            bidi_out = get_display(reshaped)
+            if isinstance(bidi_out, str) and bidi_out.strip():
+                return bidi_out
         except Exception:
             pass
 
@@ -518,7 +517,7 @@ def extract_vocal_and_rhythm_envelope(
 def _clean_phrase_text(raw: str) -> str:
     """نقطه‌ها و نشانه‌های اضافی تبدیل‌صوت را تمیز می‌کند و حروف را به فارسی نرمال می‌کند."""
     cleaned = _normalize_persian_chars(raw)
-    cleaned = re.sub(r"[.،؛:!?]+", " ", cleaned)
+    cleaned = re.sub(r"[.،؛:]+", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
@@ -527,7 +526,7 @@ def build_rhythmic_cues(
     lyrics_text: str, duration: float, fps: int, energies: list[float]
 ) -> list[tuple[int, int, str]]:
     """
-    متن را تمیز و به عبارات منسجم تقسیم می‌کند و با زمان‌بندی متناسب‌تر با خواننده
+    متن را تمیز و به عبارات منسجم تقسیم می‌کند و با زمان‌بندی دقیق‌تر و روان‌تر
     روی بازه فریم‌ها می‌نشاند.
     """
     clean = lyrics_text.strip()
@@ -557,24 +556,24 @@ def build_rhythmic_cues(
     for p in phrases:
         word_cnt = max(1, len(p.split()))
         char_cnt = len(re.sub(r"\s+", "", p))
-        weights.append(max(3.0, word_cnt * 2.2 + char_cnt * 0.45))
+        weights.append(max(2.6, word_cnt * 2.0 + char_cnt * 0.4))
 
     total_w = sum(weights)
     cues: list[tuple[int, int, str]] = []
-    cursor = int(fps * 0.35)
+    cursor = max(1, int(fps * 0.15))
 
     for idx, (phrase, w) in enumerate(zip(phrases, weights)):
         if cursor >= total_frames - 1:
             break
-        span = max(int(fps * 1.1), int(round((total_frames - cursor) * (w / total_w))))
+        span = max(int(fps * 0.95), int(round((total_frames - cursor) * (w / total_w))))
         start_f = min(cursor, total_frames - 1)
         if idx == len(phrases) - 1:
             end_f = total_frames - 1
         else:
-            end_f = min(total_frames - 1, max(start_f + 4, start_f + span - 4))
+            end_f = min(total_frames - 1, max(start_f + 3, start_f + span - 2))
 
         cues.append((start_f, end_f, phrase))
-        cursor = end_f + 4
+        cursor = end_f + 2
 
     return cues
 
@@ -662,7 +661,7 @@ def draw_centered_bold_text(
     emoji_font,
     color_rgba: tuple[int, int, int, int],
 ):
-    """متن بولد فارسی، رنگی و دارای ایموجی را با شکل‌دهی صحیح در وسط ویدئو رسم می‌کند."""
+    """متن بولد فارسی، رنگی و دارای ایموجی را با چینش راست‌به‌چپ صحیح در وسط ویدئو رسم می‌کند."""
     rendered_text = _shape_persian_text(text)
     draw = ImageDraw.Draw(frame)
     bbox = draw.textbbox((0, 0), rendered_text, font=font_bold)
@@ -752,7 +751,6 @@ def build_synced_reel(
     wm_block = make_fixed_bottom_watermark(tg_logo, ig_logo, font_wm)
     wm_w, wm_h = wm_block.size
 
-    # واترماک در وسط افقی و زیر اکولایزر با فاصله چند میلی‌متری (حدود ۱۲ پیکسل)
     fixed_wm_x = (WIDTH - wm_w) // 2
     eq_bottom_y = HEIGHT - 146
     gap_below_eq = 12
@@ -939,7 +937,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با متن فارسی متصل و راست‌به‌چپ، اکولایزر خطی و واترماک واضح‌تر آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با متن فارسی راست‌به‌چپ و متصل آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
