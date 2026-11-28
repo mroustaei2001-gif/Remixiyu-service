@@ -29,7 +29,7 @@ CHANNEL_AVATAR_OPACITY = 0.96
 
 # پالت‌های رندومِ گرادیانی (هر کلیپ یک پالت ثابت و متمایز می‌گیرد)
 RANDOM_WAVE_PALETTES = [
-    ((65, 240, 245), (125, 165, 250), (180, 105, 245)),   # فیروزه‌ای به آبی یاسی و بنفش (دقیقاً مشابه تصویر دوم)
+    ((65, 240, 245), (125, 165, 250), (180, 105, 245)),   # فیروزه‌ای به آبی یاسی و بنفش
     ((255, 196, 120), (225, 130, 165), (175, 135, 245)),  # کهربایی گرم + صورتی ملایم + یاسی
     ((245, 145, 185), (170, 165, 250), (125, 215, 250)),  # صورتی ملایم + یاسی + آبی یخی
     ((95, 235, 185), (135, 210, 245), (195, 155, 250)),   # نعنایی نرم + آبی ملایم + یاسی کم‌اشباع
@@ -131,27 +131,23 @@ def build_channel_avatar(size: int = CHANNEL_AVATAR_SIZE, font_badge=None) -> Im
 
 def build_bottom_shadow_overlay(width: int = WIDTH, height: int = HEIGHT) -> Image.Image:
     """
-    هاله سایه عمیق و نرم در بخش پایینی صفحه (مشابه تصویر دوم):
-    از حدود وسط-پایین شروع می‌شود و در یک‌سوم پایین به مشکیِ عمیق می‌رسد
-    تا اکولایزر، هاله نوری و واترمارک کاملاً برجسته و یک‌دست دیده شوند.
+    هاله سایه کاملاً یکنواخت و بدون خط مرز در پایین صفحه:
+    با منحنی Smootherstep و بلور عمودی تا انتقال از تصویر به سایه اصلاً به چشم نیاید.
     """
-    shadow_h = int(height * 0.48)
+    shadow_h = int(height * 0.55)
     start_y = height - shadow_h
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    max_alpha = 248
+    max_alpha = 242
     for y in range(start_y, height):
         t = (y - start_y) / max(1, shadow_h - 1)
-        # در نیمه بالایی سایه نرم محو می‌شود و در پایین به مشکی عمیق می‌رسد
-        if t < 0.65:
-            norm = t / 0.65
-            alpha = int(max_alpha * (norm ** 1.45))
-        else:
-            alpha = max_alpha
+        t_soft = t ** 1.15
+        smooth = t_soft * t_soft * t_soft * (t_soft * (t_soft * 6.0 - 15.0) + 10.0)
+        alpha = int(max_alpha * smooth)
         draw.line([(0, y), (width - 1, y)], fill=(6, 6, 9, alpha))
 
-    return overlay
+    return overlay.filter(ImageFilter.GaussianBlur(radius=16))
 
 
 def parse_time_to_seconds(t_str: str) -> float:
@@ -362,7 +358,7 @@ def _lerp_triple_color(
     )
 
 
-def draw_filled_ribbed_wave_equalizer(
+def draw_intertwined_sine_equalizer(
     frame: Image.Image,
     f_idx: int,
     rhythm_amp: float,
@@ -370,22 +366,22 @@ def draw_filled_ribbed_wave_equalizer(
     palette: tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]],
 ) -> int:
     """
-    دقیقاً اکولایزر تصویر دوم با تمام جزئیات:
-    - قله اصلی برجسته‌تر در چپ-مرکز و قله ملایم‌تر در راست
-    - پرشدگیِ نیمه‌شفافِ یک‌دست + خطوط عمودیِ بسیار ظریف و متراکم روی آن
-    - هاله نوریِ پهن و نرم پشت قله‌ها + خط درخشان و تیز روی لبه بالایی
-    - خط جداکننده افقیِ ظریف بین اکولایزر و واترمارک
+    اکولایزر موج‌های سینوسیِ درهم‌تنیده نئونی:
+    - ۵ رشته موجِ هم‌تنیده با فرکانس و فاز متفاوت
+    - هاله نوریِ دو مرحله‌ای و ذرات نوریِ ریز اطراف موج
+    - واکنش رشته‌های اصلی به ریتم و رشته درخشانِ مرکزی به وکال
+    - خط جداکننده ظریف بین اکولایزر و واترمارک
     """
     c1, c2, c3 = palette
 
-    wave_w = 320
-    wave_h = 112
-    pad = 24  # حاشیه اضافه برای پخش شدن نرمِ هاله نوری بدون بریدگی
+    wave_w = 340
+    wave_h = 96
+    pad = 22
     canvas_w = wave_w + pad * 2
     canvas_h = wave_h + pad * 2
 
     start_x = (WIDTH - canvas_w) // 2
-    base_y = HEIGHT - 235
+    base_y = HEIGHT - 225
 
     ambient_glow = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     tight_glow = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -395,84 +391,79 @@ def draw_filled_ribbed_wave_equalizer(
     draw_tight = ImageDraw.Draw(tight_glow)
     draw_main = ImageDraw.Draw(overlay)
 
-    bottom_line_y = pad + wave_h - 14
-    phase = f_idx * 0.16
+    center_y = pad + wave_h // 2
+    phase = f_idx * 0.20
 
-    top_pts = []
-    for x_rel in range(0, wave_w + 1, 2):
-        u = x_rel / max(1, wave_w)
-        x = pad + x_rel
+    # (فرکانس، سرعت فاز، ضریب ارتفاع، شفافیت، ضخامت، نوع واکنش)
+    strands = [
+        (5.5, 1.00, 1.00, 245, 2, "vocal"),   # موج اصلیِ درخشان (حساس به وکال)
+        (4.2, -0.85, 0.92, 185, 2, "rhythm"), # موج دومِ متقاطع (حساس به ریتم)
+        (6.8, 1.35, 0.72, 145, 1, "rhythm"),  # موج ظریف‌ترِ سریع
+        (3.4, -0.55, 0.80, 120, 1, "both"),   # موج پهنِ پس‌زمینه
+        (8.0, 0.70, 0.50, 95, 1, "vocal"),    # رشته نازکِ هارمونیک
+    ]
 
-        # دو سر منحنی نرم و تیز به صفر می‌رسند
-        edge_envelope = math.sin(u * math.pi) ** 1.7
+    steps = 85
+    max_amp = (wave_h // 2) - 8
 
-        # قله اصلی بلندتر در چپ-مرکز (ریتم/ضرب) و قله ملایم‌تر در راست (وکال)
-        left_peak = math.exp(-((u - 0.27) ** 2) / 0.015)
-        right_peak = math.exp(-((u - 0.72) ** 2) / 0.026)
+    for freq, speed, amp_scale, alpha, stroke_w, mode in strands:
+        pts = []
+        for s in range(steps + 1):
+            u = s / steps
+            x = pad + int(u * wave_w)
 
-        rhythm_pulse = 0.72 + 0.28 * math.sin(phase - u * 4.0)
-        vocal_pulse = 0.70 + 0.30 * math.cos(phase * 0.8 + u * 4.5)
+            envelope = math.sin(u * math.pi) ** 1.35
 
-        h_left = left_peak * (0.42 + rhythm_amp * 0.88 * rhythm_pulse)
-        h_right = right_peak * (0.22 + vocal_amp * 0.52 * vocal_pulse)
-        ripple = 0.05 * (0.5 + 0.5 * math.sin(u * 10.0 - phase))
+            if mode == "vocal":
+                energy = 0.25 + vocal_amp * 0.85
+            elif mode == "rhythm":
+                energy = 0.25 + rhythm_amp * 0.85
+            else:
+                energy = 0.22 + (rhythm_amp * 0.5 + vocal_amp * 0.5) * 0.80
 
-        combined = min(1.0, (h_left + h_right + ripple) * edge_envelope)
-        bar_h = max(1, int(combined * (wave_h - 24)))
-        y_top = bottom_line_y - bar_h
-        top_pts.append((x, y_top, u))
+            y_offset = math.sin(u * math.pi * freq - phase * speed) * max_amp * amp_scale * energy * envelope
+            y = int(center_y + y_offset)
+            pts.append((x, y, u))
 
-        col = _lerp_triple_color(c1, c2, c3, u)
-
-        # ۱. هاله نوریِ پهن پشت کل بدنه موج
-        draw_amb.line([(x, bottom_line_y), (x, y_top)], fill=(col[0], col[1], col[2], 140), width=3)
-
-        # ۲. پرشدگیِ نیمه‌شفافِ یک‌دست زیر منحنی
-        draw_main.line([(x, bottom_line_y), (x, y_top)], fill=(col[0], col[1], col[2], 115), width=2)
-
-        # ۳. خطوط عمودیِ ظریف و متراکم (ribbed texture) روی بدنه
-        if x_rel % 4 == 0:
-            draw_main.line([(x, bottom_line_y), (x, y_top)], fill=(col[0], col[1], col[2], 195), width=1)
-
-    # ۴. خط درخشان و تیز روی لبه بالایی منحنی
-    if len(top_pts) >= 2:
-        for idx in range(len(top_pts) - 1):
-            x1, y1, u1 = top_pts[idx]
-            x2, y2, _ = top_pts[idx + 1]
+        for idx in range(len(pts) - 1):
+            x1, y1, u1 = pts[idx]
+            x2, y2, _ = pts[idx + 1]
             col = _lerp_triple_color(c1, c2, c3, u1)
-            # کمی روشن‌تر کردن خط لبه بالایی برای جلوه نئونی دقیق
-            bright = (min(255, col[0] + 45), min(255, col[1] + 45), min(255, col[2] + 45))
-            draw_tight.line([(x1, y1), (x2, y2)], fill=(col[0], col[1], col[2], 210), width=4)
-            draw_main.line([(x1, y1), (x2, y2)], fill=(bright[0], bright[1], bright[2], 255), width=2)
 
-    # ۵. خط پایه ظریفِ چسبیده به زیر موج
-    for x_rel in range(0, wave_w, 4):
-        u = x_rel / max(1, wave_w)
-        col = _lerp_triple_color(c1, c2, c3, u)
-        edge_a = int(170 * math.sin(u * math.pi))
-        draw_main.line(
-            [(pad + x_rel, bottom_line_y + 1), (pad + x_rel + 4, bottom_line_y + 1)],
-            fill=(col[0], col[1], col[2], edge_a),
-            width=1,
-        )
+            if stroke_w >= 2:
+                bright = (min(255, col[0] + 50), min(255, col[1] + 50), min(255, col[2] + 50))
+                draw_amb.line([(x1, y1), (x2, y2)], fill=(col[0], col[1], col[2], 125), width=6)
+                draw_tight.line([(x1, y1), (x2, y2)], fill=(col[0], col[1], col[2], 190), width=3)
+                draw_main.line([(x1, y1), (x2, y2)], fill=(bright[0], bright[1], bright[2], alpha), width=stroke_w)
+            else:
+                draw_main.line([(x1, y1), (x2, y2)], fill=(col[0], col[1], col[2], alpha), width=1)
 
-    # ترکیب دو لایه هاله نوری + لایه اصلی
-    amb_blurred = ambient_glow.filter(ImageFilter.GaussianBlur(radius=14))
-    tight_blurred = tight_glow.filter(ImageFilter.GaussianBlur(radius=4))
+    # ذرات نوریِ ریز و متحرک اطراف موج
+    for p_idx in range(14):
+        u_p = ((p_idx * 0.073 + f_idx * 0.004) % 0.84) + 0.08
+        px = pad + int(u_p * wave_w)
+        py_shift = math.sin(p_idx * 2.3 + f_idx * 0.12) * (max_amp * 0.85) * (0.4 + rhythm_amp * 0.6)
+        py = int(center_y + py_shift)
+        col = _lerp_triple_color(c1, c2, c3, u_p)
+        p_alpha = int(170 * math.sin(u_p * math.pi))
+        draw_main.ellipse((px - 1, py - 1, px + 1, py + 1), fill=(col[0], col[1], col[2], p_alpha))
+
+    amb_blurred = ambient_glow.filter(ImageFilter.GaussianBlur(radius=10))
+    tight_blurred = tight_glow.filter(ImageFilter.GaussianBlur(radius=3))
 
     frame.paste(amb_blurred, (start_x, base_y), amb_blurred)
     frame.paste(tight_blurred, (start_x, base_y), tight_blurred)
     frame.paste(overlay, (start_x, base_y), overlay)
 
-    # ۶. خط جداکننده ظریف بین اکولایزر و واترمارک (مشابه تصویر دوم)
-    divider_y = base_y + bottom_line_y + 24
+    # خط جداکننده ظریف بین اکولایزر و واترمارک
+    divider_y = base_y + pad + wave_h + 10
     div_w = 270
     div_x0 = (WIDTH - div_w) // 2
     div_layer = Image.new("RGBA", (WIDTH, 4), (0, 0, 0, 0))
     div_draw = ImageDraw.Draw(div_layer)
     for dx in range(0, div_w, 3):
         u = dx / max(1, div_w)
-        a = int(95 * math.sin(u * math.pi))
+        a = int(90 * math.sin(u * math.pi))
         div_draw.line([(div_x0 + dx, 1), (div_x0 + dx + 3, 1)], fill=(220, 225, 240, a), width=1)
     frame.paste(div_layer, (0, divider_y), div_layer)
 
@@ -559,8 +550,8 @@ def build_synced_reel(
 ) -> tuple[bool, str]:
     """
     کلیپ پس‌زمینه را هم‌اندازه تایم موزیک کات می‌زند، صدای اصلی کلیپ را قطع می‌کند،
-    سایه عمیق پایین صفحه را اعمال می‌کند، اکولایزر طیفیِ قله‌ای را با جزئیات کامل و پالت رندوم
-    در پایین قرار می‌دهد و آواتار کانال + واترمارک را زیر خط جداکننده و وسط‌چین ذخیره می‌کند.
+    سایه کاملاً محو و بدون مرز در پایین صفحه اعمال می‌کند، اکولایزر موج‌های درهم‌تنیده را
+    با یک پالت رندوم ثابت در پایین قرار می‌دهد و آواتار کانال + واترمارک را زیر آن ذخیره می‌کند.
     """
     if not video_path or not os.path.exists(video_path):
         return False, "ابتدا ویدئوی خام بدون واترماک را با دستور .setbg ثبت کنید."
@@ -574,7 +565,6 @@ def build_synced_reel(
 
     duration = min(end_sec - start_sec, float(MAX_DURATION))
 
-    # انتخاب تصادفی یک پالت رنگی برای کل این کلیپ تا نسبت به ریلزهای دیگر متمایز باشد
     selected_palette = random.choice(RANDOM_WAVE_PALETTES)
     _log(f"شروع ساخت ریلز {duration:.1f} ثانیه‌ای با پالت رندوم: {selected_palette}")
 
@@ -695,7 +685,7 @@ def build_synced_reel(
             r_amp = rhythm_env[f_idx] if f_idx < len(rhythm_env) else 0.2
             v_amp = vocal_env[f_idx] if f_idx < len(vocal_env) else 0.2
 
-            draw_filled_ribbed_wave_equalizer(frame, f_idx, r_amp, v_amp, selected_palette)
+            draw_intertwined_sine_equalizer(frame, f_idx, r_amp, v_amp, selected_palette)
             frame.paste(wm_block, (fixed_wm_x, fixed_wm_y), wm_block)
 
             try:
@@ -764,7 +754,7 @@ def build_synced_reel(
             return False, f"فایل ویدئویی نهایی ساخته نشد.\n{dec_err[-500:]}"
 
         _log(f"ساخت ویدئو با موفقیت تمام شد ({written_frames} فریم، rc={rc}).")
-        return True, f"ریلز {duration:.0f} ثانیه‌ای با سایه عمیق پایین و اکولایزر طیفی پرجزئیات آماده شد."
+        return True, f"ریلز {duration:.0f} ثانیه‌ای با سایه محو پایین و اکولایزر موج درهم‌تنیده آماده شد."
 
     except Exception as e:
         _log(f"استثنا در build_synced_reel: {e}")
